@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>shamsul-server Control Center</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #08090f;
+            --card-bg: rgba(17, 19, 35, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary-glow: linear-gradient(135deg, #a855f7 0%, #3b82f6 100%);
+            --accent-glow: linear-gradient(135deg, #ec4899 0%, #f97316 100%);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --success-color: #10b981;
+            --error-color: #ef4444;
+            --pulse-glow: 0 0 20px rgba(168, 85, 247, 0.4);
+            --input-bg: rgba(0, 0, 0, 0.3);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'Outfit', sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        /* Abstract glowing backgrounds */
+        body::before {
+            content: '';
+            position: absolute;
+            top: -20%;
+            left: -10%;
+            width: 60vw;
+            height: 60vw;
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.12) 0%, transparent 70%);
+            filter: blur(120px);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        body::after {
+            content: '';
+            position: absolute;
+            bottom: -10%;
+            right: -10%;
+            width: 50vw;
+            height: 50vw;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.12) 0%, transparent 70%);
+            filter: blur(120px);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        .grid-bg {
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+            background-size: 50px 50px;
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        header {
+            padding: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-icon {
+            width: 42px;
+            height: 42px;
+            background: var(--primary-glow);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1.5rem;
+            box-shadow: var(--pulse-glow);
+        }
+
+        .logo-text {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            background: linear-gradient(to right, #f8fafc, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(16, 185, 129, 0.08);
+            border: 1px solid rgba(16, 185, 129, 0.15);
+            padding: 0.5rem 1.25rem;
+            border-radius: 99px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--success-color);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--success-color);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--success-color);
+        }
+
+        main {
+            flex: 1;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 0 2rem 4rem 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2.5rem;
+        }
+
+        .hero {
+            text-align: center;
+            max-width: 800px;
+            margin: 2rem auto 1rem auto;
+        }
+
+        .hero h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 3rem;
+            font-weight: 700;
+            line-height: 1.1;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #fff 50%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            color: var(--text-secondary);
+            font-size: 1.15rem;
+            line-height: 1.5;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 2rem;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+        }
+
+        .card:hover {
+            border-color: rgba(168, 85, 247, 0.25);
+            box-shadow: 0 10px 40px -15px rgba(0, 0, 0, 0.8);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .card-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            padding: 0.25rem 0.75rem;
+            border-radius: 99px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+        }
+
+        .col-12 { grid-column: span 12; }
+        .col-6 { grid-column: span 6; }
+        .col-4 { grid-column: span 4; }
+
+        @media (max-width: 992px) {
+            .col-6, .col-4 { grid-column: span 12; }
+        }
+
+        /* Forms Styling */
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        select, input, textarea {
+            background-color: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-primary);
+            padding: 0.85rem 1rem;
+            font-family: inherit;
+            font-size: 0.95rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            outline: none;
+            width: 100%;
+        }
+
+        select:focus, input:focus, textarea:focus {
+            border-color: #a855f7;
+            box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 180px;
+            font-family: monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+        }
+
+        .btn {
+            background: var(--primary-glow);
+            color: white;
+            border: none;
+            padding: 0.85rem 1.75rem;
+            border-radius: 14px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            box-shadow: 0 4px 12px rgba(168, 85, 247, 0.15);
+        }
+
+        .btn:hover {
+            transform: scale(1.015);
+            box-shadow: 0 6px 20px rgba(168, 85, 247, 0.3);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            box-shadow: none;
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.03);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Toast Container */
+        #toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            z-index: 9999;
+        }
+
+        .toast {
+            background: rgba(15, 17, 28, 0.95);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(12px);
+            padding: 1rem 1.5rem;
+            border-radius: 14px;
+            color: var(--text-primary);
+            font-weight: 500;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            min-width: 300px;
+        }
+
+        .toast-success { border-left: 4px solid var(--success-color); }
+        .toast-error { border-left: 4px solid var(--error-color); }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(100%) scale(0.9);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0) scale(1);
+                opacity: 1;
+            }
+        }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .btn-row {
+            display: flex;
+            justify-content: flex-end;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        footer {
+            padding: 2rem;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.2);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-bg"></div>
+
+    <header>
+        <div class="logo-container">
+            <div class="logo-icon">S</div>
+            <div class="logo-text">shamsul-server</div>
+        </div>
+        <div class="status-badge">
+            <div class="status-dot"></div>
+            <span>Server Active</span>
+        </div>
+    </header>
+
+    <main>
+        <div class="hero">
+            <h1>shamsul-server Control Center</h1>
+            <p>Select your local Ollama models, edit your system planning prompt, or download new models in real-time. Changes are permanently persisted to your configuration.</p>
+        </div>
+
+        <form id="config-form" class="dashboard-grid" onsubmit="saveConfig(event)">
+            <!-- Model Selection Card -->
+            <div class="card col-6">
+                <div class="card-header">
+                    <h2 class="card-title">Ollama Model Selection</h2>
+                    <span class="card-badge">Required</span>
+                </div>
+                
+                <div class="form-group">
+                    <label for="reasoning-model">Reasoning Lead Model</label>
+                    <select id="reasoning-model" required>
+                        <option value="" disabled selected>Loading installed models...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="coding-model">Coding Executor Model</label>
+                    <select id="coding-model" required>
+                        <option value="" disabled selected>Loading installed models...</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Optional Config Card -->
+            <div class="card col-6">
+                <div class="card-header">
+                    <h2 class="card-title">Optional Integrations</h2>
+                    <span class="card-badge">Optional</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="voice-model">Voice Transcription Model</label>
+                    <input type="text" id="voice-model" placeholder="e.g. whisper-base (Leave empty to disable)">
+                </div>
+
+                <div class="form-group">
+                    <label for="image-model">Vision / Image Model</label>
+                    <input type="text" id="image-model" placeholder="e.g. llava (Leave empty to disable)">
+                </div>
+            </div>
+
+            <!-- Context Prompt Editor Card -->
+            <div class="card col-12">
+                <div class="card-header">
+                    <h2 class="card-title">Lead Reasoning System Prompt</h2>
+                    <span class="card-badge">Context engineering</span>
+                </div>
+                <div class="form-group">
+                    <label for="reasoning-prompt">Instructions for the Reasoning Lead Agent</label>
+                    <textarea id="reasoning-prompt" required placeholder="Type the planning instructions here..."></textarea>
+                </div>
+                <div class="btn-row">
+                    <button type="button" class="btn btn-outline" onclick="resetDefaultPrompt()">Reset to Default</button>
+                    <button type="submit" id="save-btn" class="btn">Save Configurations</button>
+                </div>
+            </div>
+        </form>
+
+        <!-- Ollama Model Downloader Card -->
+        <div class="dashboard-grid">
+            <div class="card col-12">
+                <div class="card-header">
+                    <h2 class="card-title">Ollama Model Downloader</h2>
+                    <span class="card-badge">Downloads</span>
+                </div>
+                <p style="color: var(--text-secondary); font-size: 0.95rem; line-height: 1.5;">
+                    Need a new model? Type the tag name (e.g., <code>qwen2.5-coder:7b</code> or <code>deepseek-r1:8b</code>) below to pull it directly into your local Ollama instance.
+                </p>
+                <div class="form-group" style="display: flex; flex-direction: row; gap: 1rem; width: 100%;">
+                    <input type="text" id="pull-model-name" placeholder="e.g. qwen2.5-coder:7b" style="flex: 1;">
+                    <button type="button" id="pull-btn" class="btn" onclick="pullModel()">Pull Model</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="toast-container"></div>
+
+    <footer>
+        <p>&copy; 2026 shamsul-server Control Center. All rights reserved.</p>
+    </footer>
+
+    <script>
+        const DEFAULT_PROMPT = `You are the Lead Reasoning Agent. Your job is to analyze the user request and codebase context, and construct a precise, step-by-step instruction plan for the Coding Agent to execute. Detail the required logic, edge cases, and which tools (e.g. read_file, replace_file_content) should be used. Keep your response highly structured, action-oriented, and focused on planning. Do not write the code itself, just guide the execution agent.`;
+
+        // Initialize values on load
+        window.addEventListener('DOMContentLoaded', async () => {
+            await loadInstalledModels();
+            await loadCurrentConfig();
+        });
+
+        // Show toast alert helper
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.innerText = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(20px) scale(0.9)';
+                toast.style.transition = 'all 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // Fetch local models from tags API
+        async function loadInstalledModels() {
+            try {
+                const response = await fetch('/api/models');
+                const models = await response.json();
+                
+                const rSelect = document.getElementById('reasoning-model');
+                const cSelect = document.getElementById('coding-model');
+                
+                rSelect.innerHTML = '';
+                cSelect.innerHTML = '';
+                
+                if (models.length === 0) {
+                    const noOption = '<option value="" disabled>No installed models found in Ollama. Make sure Ollama is running.</option>';
+                    rSelect.innerHTML = noOption;
+                    cSelect.innerHTML = noOption;
+                    return;
+                }
+                
+                models.forEach(model => {
+                    const optionHtml = `<option value="${model}">${model}</option>`;
+                    rSelect.insertAdjacentHTML('beforeend', optionHtml);
+                    cSelect.insertAdjacentHTML('beforeend', optionHtml);
+                });
+            } catch (error) {
+                console.error('Failed to load local models:', error);
+                showToast('Failed to connect to local Ollama. Make sure it is running.', 'error');
+            }
+        }
+
+        // Load active configuration settings
+        async function loadCurrentConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                
+                const rSelect = document.getElementById('reasoning-model');
+                const cSelect = document.getElementById('coding-model');
+                
+                // Select values if they are present in dropdown, otherwise append them as fallback options
+                if (config.ollama_reasoning_model) {
+                    if (![...rSelect.options].some(o => o.value === config.ollama_reasoning_model)) {
+                        rSelect.insertAdjacentHTML('beforeend', `<option value="${config.ollama_reasoning_model}">${config.ollama_reasoning_model} (configured but not pulled)</option>`);
+                    }
+                    rSelect.value = config.ollama_reasoning_model;
+                }
+                
+                if (config.ollama_coding_model) {
+                    if (![...cSelect.options].some(o => o.value === config.ollama_coding_model)) {
+                        cSelect.insertAdjacentHTML('beforeend', `<option value="${config.ollama_coding_model}">${config.ollama_coding_model} (configured but not pulled)</option>`);
+                    }
+                    cSelect.value = config.ollama_coding_model;
+                }
+                
+                document.getElementById('voice-model').value = config.ollama_voice_model || '';
+                document.getElementById('image-model').value = config.ollama_image_model || '';
+                document.getElementById('reasoning-prompt').value = config.ollama_reasoning_system_prompt || DEFAULT_PROMPT;
+            } catch (error) {
+                console.error('Failed to load config:', error);
+                showToast('Failed to load current configuration.', 'error');
+            }
+        }
+
+        // Save updated configs to API
+        async function saveConfig(event) {
+            event.preventDefault();
+            
+            const saveBtn = document.getElementById('save-btn');
+            const originalText = saveBtn.innerText;
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<div class="spinner"></div> Saving...';
+            
+            const payload = {
+                ollama_reasoning_model: document.getElementById('reasoning-model').value,
+                ollama_coding_model: document.getElementById('coding-model').value,
+                ollama_voice_model: document.getElementById('voice-model').value || null,
+                ollama_image_model: document.getElementById('image-model').value || null,
+                ollama_reasoning_system_prompt: document.getElementById('reasoning-prompt').value
+            };
+            
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (response.ok) {
+                    showToast('Configuration successfully saved and reloaded!');
+                } else {
+                    showToast('Failed to save configuration.', 'error');
+                }
+            } catch (error) {
+                console.error('Failed to save config:', error);
+                showToast('Failed to save configuration.', 'error');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.innerText = originalText;
+            }
+        }
+
+        // Reset text area to default planning instructions
+        function resetDefaultPrompt() {
+            document.getElementById('reasoning-prompt').value = DEFAULT_PROMPT;
+            showToast('Prompt reset to default instructions.');
+        }
+
+        // Pull model from Ollama registry
+        async function pullModel() {
+            const modelNameInput = document.getElementById('pull-model-name');
+            const modelName = modelNameInput.value.trim();
+            if (!modelName) {
+                showToast('Please type a model name first.', 'error');
+                return;
+            }
+            
+            const pullBtn = document.getElementById('pull-btn');
+            pullBtn.disabled = true;
+            pullBtn.innerHTML = '<div class="spinner"></div> Pulling...';
+            
+            showToast(`Initiated pull request for "${modelName}". This may take several minutes...`);
+            
+            try {
+                const response = await fetch('/api/pull', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: modelName })
+                });
+                
+                const data = await response.json();
+                if (data.status === 'success') {
+                    showToast(`Successfully pulled model "${modelName}"!`);
+                    modelNameInput.value = '';
+                    await loadInstalledModels();
+                    await loadCurrentConfig();
+                } else {
+                    showToast(`Failed to pull model: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                console.error('Failed to pull model:', error);
+                showToast(`Connection error while pulling model: ${error.message}`, 'error');
+            } finally {
+                pullBtn.disabled = false;
+                pullBtn.innerText = 'Pull Model';
+            }
+        }
+    </script>
+</body>
+</html>
