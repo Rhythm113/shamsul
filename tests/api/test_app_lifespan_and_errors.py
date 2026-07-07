@@ -62,7 +62,7 @@ def _fake_messaging_components(runtime: MagicMock | None = None) -> SimpleNamesp
 
 
 @pytest.fixture(autouse=True)
-def _redirect_fcc_home(monkeypatch, tmp_path):
+def _redirect_shamsul_home(monkeypatch, tmp_path):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
@@ -647,8 +647,8 @@ def test_app_lifespan_flush_pending_save_exception_warning_only(tmp_path):
     runtime_cleanup.assert_awaited_once()
 
 
-def test_create_app_writes_server_log_under_fcc_home(monkeypatch, tmp_path):
-    """App logging uses ~/.fcc/logs/server.log regardless of cwd."""
+def test_create_app_writes_server_log_under_shamsul_home(monkeypatch, tmp_path):
+    """App logging uses ~/.shamsul/logs/server.log regardless of cwd."""
     from loguru import logger
 
     import config.logging_config as logging_config_mod
@@ -667,7 +667,7 @@ def test_create_app_writes_server_log_under_fcc_home(monkeypatch, tmp_path):
     logger.complete()
 
     canonical_log = server_log_path()
-    assert canonical_log == tmp_path / ".fcc" / "logs" / "server.log"
+    assert canonical_log == tmp_path / ".shamsul" / "logs" / "server.log"
     assert canonical_log.is_file()
     assert "canonical log path test" in canonical_log.read_text(encoding="utf-8")
     assert not (run_dir / "logs" / "server.log").exists()

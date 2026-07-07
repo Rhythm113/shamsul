@@ -1,4 +1,4 @@
-"""Tests for cli/entrypoints.py — fcc-init scaffolding logic."""
+"""Tests for cli/entrypoints.py — shamsul-init scaffolding logic."""
 
 import json
 import tomllib
@@ -16,7 +16,7 @@ from config.settings import Settings
 def _launcher_settings(
     *,
     port: int = 8082,
-    token: str = "freecc",
+    token: str = "shamsul",
 ) -> Settings:
     return Settings.model_construct(
         host="0.0.0.0",
@@ -30,7 +30,7 @@ def _run_init(tmp_home: Path) -> tuple[str, Path]:
     """Run init() with home directory redirected to tmp_home. Returns (printed output, env_file path)."""
     from cli.entrypoints import init
 
-    env_file = tmp_home / ".fcc" / ".env"
+    env_file = tmp_home / ".shamsul" / ".env"
     printed: list[str] = []
 
     with (
@@ -79,8 +79,8 @@ def test_init_copies_template_content(tmp_path: Path) -> None:
 
 
 def test_init_migrates_home_checkout_env_before_template(tmp_path: Path) -> None:
-    """init() preserves users who kept config in ~/free-claude-code/.env."""
-    legacy_env = tmp_path / "free-claude-code" / ".env"
+    """init() preserves users who kept config in ~/.fcc/.env."""
+    legacy_env = tmp_path / ".fcc" / ".env"
     legacy_env.parent.mkdir(parents=True)
     legacy_env.write_text("MODEL=deepseek/deepseek-chat\n", encoding="utf-8")
 
@@ -91,8 +91,8 @@ def test_init_migrates_home_checkout_env_before_template(tmp_path: Path) -> None
 
 
 def test_init_migrates_legacy_xdg_env_before_template(tmp_path: Path) -> None:
-    """init() preserves users who kept config in ~/.config/free-claude-code/.env."""
-    legacy_env = tmp_path / ".config" / "free-claude-code" / ".env"
+    """init() preserves users who kept config in ~/.config/.fcc/.env."""
+    legacy_env = tmp_path / ".config" / ".fcc" / ".env"
     legacy_env.parent.mkdir(parents=True)
     legacy_env.write_text("MODEL=open_router/free-model\n", encoding="utf-8")
 
@@ -105,13 +105,13 @@ def test_init_migrates_legacy_xdg_env_before_template(tmp_path: Path) -> None:
 def test_legacy_env_migration_does_not_overwrite_managed_env(
     tmp_path: Path,
 ) -> None:
-    """Legacy migration never overwrites an existing ~/.fcc/.env."""
+    """Legacy migration never overwrites an existing ~/.shamsul/.env."""
     from cli.entrypoints import _migrate_legacy_env_if_missing
 
-    managed_env = tmp_path / ".fcc" / ".env"
+    managed_env = tmp_path / ".shamsul" / ".env"
     managed_env.parent.mkdir(parents=True)
     managed_env.write_text("MODEL=nvidia_nim/current\n", encoding="utf-8")
-    legacy_env = tmp_path / "free-claude-code" / ".env"
+    legacy_env = tmp_path / ".fcc" / ".env"
     legacy_env.parent.mkdir(parents=True)
     legacy_env.write_text("MODEL=deepseek/legacy\n", encoding="utf-8")
 
@@ -134,8 +134,8 @@ def test_env_template_loader_uses_root_template_in_source_checkout() -> None:
 
 
 def test_init_creates_parent_directories(tmp_path: Path) -> None:
-    """init() creates ~/.fcc/ even if it doesn't exist."""
-    config_dir = tmp_path / ".fcc"
+    """init() creates ~/.shamsul/ even if it doesn't exist."""
+    config_dir = tmp_path / ".shamsul"
     assert not config_dir.exists()
 
     _run_init(tmp_path)
@@ -148,7 +148,7 @@ def test_init_skips_if_env_already_exists(tmp_path: Path) -> None:
     # Create it first
     _run_init(tmp_path)
 
-    env_file = tmp_path / ".fcc" / ".env"
+    env_file = tmp_path / ".shamsul" / ".env"
     env_file.write_text("existing content", encoding="utf-8")
 
     output, _ = _run_init(tmp_path)
@@ -158,10 +158,10 @@ def test_init_skips_if_env_already_exists(tmp_path: Path) -> None:
 
 
 def test_init_prints_next_step_hint(tmp_path: Path) -> None:
-    """init() tells the user to run fcc-server after editing .env."""
+    """init() tells the user to run shamsul-server after editing .env."""
     output, _ = _run_init(tmp_path)
 
-    assert "fcc-server" in output
+    assert "shamsul-server" in output
 
 
 def test_cli_scripts_are_registered() -> None:
@@ -172,16 +172,17 @@ def test_cli_scripts_are_registered() -> None:
     )
 
     scripts = pyproject["project"]["scripts"]
-    assert scripts["fcc-server"] == "cli.entrypoints:serve"
-    assert scripts["free-claude-code"] == "cli.entrypoints:serve"
-    assert scripts["fcc-claude"] == "cli.launchers.claude:launch"
-    assert scripts["fcc-codex"] == "cli.launchers.codex:launch"
+    assert scripts["shamsul"] == "cli.entrypoints:serve"
+    assert scripts["shamsul-init"] == "cli.entrypoints:init"
+    assert scripts["shamsul-claude"] == "cli.launchers.claude:launch"
+    assert scripts["shamsul-codex"] == "cli.launchers.codex:launch"
 
 
 def test_schedule_open_admin_browser_opens_when_health_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Opening /admin runs after /health preflight succeeds."""
+    monkeypatch.delenv("SHAMSUL_OPEN_BROWSER", raising=False)
     monkeypatch.delenv("FCC_OPEN_BROWSER", raising=False)
     from api.admin_urls import local_admin_url
     from cli import entrypoints
@@ -215,7 +216,7 @@ def test_schedule_open_admin_browser_opens_when_health_ready(
 def test_schedule_open_admin_browser_skips_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("FCC_OPEN_BROWSER", "0")
+    monkeypatch.setenv("SHAMSUL_OPEN_BROWSER", "0")
     from cli import entrypoints
 
     settings = _launcher_settings()
@@ -265,7 +266,7 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
 def test_serve_migrates_legacy_env_before_loading_settings(tmp_path: Path) -> None:
     from cli import entrypoints
 
-    legacy_env = tmp_path / "free-claude-code" / ".env"
+    legacy_env = tmp_path / ".fcc" / ".env"
     legacy_env.parent.mkdir(parents=True)
     legacy_env.write_text("MODEL=deepseek/deepseek-chat\n", encoding="utf-8")
     settings = _launcher_settings()
@@ -280,7 +281,7 @@ def test_serve_migrates_legacy_env_before_loading_settings(tmp_path: Path) -> No
     ):
         entrypoints.serve()
 
-    assert (tmp_path / ".fcc" / ".env").read_text("utf-8") == (
+    assert (tmp_path / ".shamsul" / ".env").read_text("utf-8") == (
         "MODEL=deepseek/deepseek-chat\n"
     )
     get_settings.assert_called_once_with()
@@ -324,7 +325,7 @@ def test_config_env_key_migration_warns_for_explicit_env_file(
     explicit = tmp_path / "custom.env"
     explicit.write_text("HF_TOKEN=legacy-hf\n", encoding="utf-8")
 
-    with patch.dict(entrypoints.os.environ, {"FCC_ENV_FILE": str(explicit)}):
+    with patch.dict(entrypoints.os.environ, {"SHAMSUL_ENV_FILE": str(explicit)}):
         migrated = entrypoints._migrate_config_env_keys()
 
     assert migrated == ()
@@ -388,7 +389,7 @@ def test_claude_child_env_uses_sentinel_for_blank_configured_auth_token() -> Non
         },
     )
 
-    assert env["ANTHROPIC_AUTH_TOKEN"] == "fcc-no-auth"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "shamsul-no-auth"
     assert "ANTHROPIC_API_KEY" not in env
 
 
@@ -449,12 +450,12 @@ def test_launch_codex_passes_responses_config_and_child_env(
             {
                 "data": [
                     {
-                        "id": "anthropic/nvidia_nim/provider-model",
-                        "display_name": "NVIDIA model",
+                        "id": "anthropic/ollama/provider-model",
+                        "display_name": "Ollama model",
                     },
                     {
-                        "id": ("claude-3-freecc-no-thinking/nvidia_nim/provider-model"),
-                        "display_name": "NVIDIA model (no thinking)",
+                        "id": ("claude-3-shamsul-no-thinking/ollama/provider-model"),
+                        "display_name": "Ollama model (no thinking)",
                     },
                     {
                         "id": "claude-opus-4-20250514",
@@ -485,9 +486,9 @@ def test_launch_codex_passes_responses_config_and_child_env(
     assert exc_info.value.code == 0
     command = popen.call_args.args[0]
     assert command[0] == "resolved-codex.cmd"
-    assert 'model_provider="fcc"' in command
-    assert 'model_providers.fcc.base_url="http://127.0.0.1:9191/v1"' in command
-    assert 'model_providers.fcc.wire_api="responses"' in command
+    assert 'model_provider="shamsul"' in command
+    assert 'model_providers.shamsul.base_url="http://127.0.0.1:9191/v1"' in command
+    assert 'model_providers.shamsul.wire_api="responses"' in command
     assert f"model_catalog_json={json.dumps(str(catalog_path))}" in command
     assert command[-2:] == ["exec", "hello"]
     assert len(requests) == 1
@@ -496,11 +497,9 @@ def test_launch_codex_passes_responses_config_and_child_env(
     headers = {key.lower(): value for key, value in request.header_items()}
     assert headers["x-api-key"] == "proxy-token"
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    assert [model["slug"] for model in catalog["models"]] == [
-        "nvidia_nim/provider-model"
-    ]
+    assert [model["slug"] for model in catalog["models"]] == ["ollama/provider-model"]
     child_env = popen.call_args.kwargs["env"]
-    assert child_env["FCC_CODEX_API_KEY"] == "proxy-token"
+    assert child_env["SHAMSUL_CODEX_API_KEY"] == "proxy-token"
     assert child_env["CODEX_HOME"] == "keep-home"
     assert "OPENAI_API_KEY" not in child_env
     assert "OPENAI_BASE_URL" not in child_env
@@ -610,4 +609,4 @@ def test_launch_claude_unreachable_proxy_exits_with_hint(
     popen.assert_not_called()
     captured = capsys.readouterr()
     assert "http://127.0.0.1:9393" in captured.err
-    assert "fcc-server" in captured.err
+    assert "shamsul-server" in captured.err

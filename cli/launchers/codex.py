@@ -18,7 +18,7 @@ from .common import (
     run_client_process,
 )
 
-_CODEX_AUTH_ENV_KEY = "FCC_CODEX_API_KEY"
+_CODEX_AUTH_ENV_KEY = "SHAMSUL_CODEX_API_KEY"
 _DISPLAY_NAME = "Codex CLI"
 _DEFAULT_BINARY = "codex"
 _INSTALL_HINT = "Install Codex with: npm install -g @openai/codex"
@@ -174,19 +174,19 @@ def build_model_catalog_config_args(catalog_path: str) -> list[str]:
 
 
 def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
-    """Return Codex `-c` assignments for the ephemeral FCC provider."""
+    """Return Codex `-c` assignments for the ephemeral Shamsul provider."""
 
     args = [
         "-c",
-        _toml_assignment("model_provider", "fcc"),
+        _toml_assignment("model_provider", "shamsul"),
         "-c",
-        _toml_assignment("model_providers.fcc.name", "Free Claude Code"),
+        _toml_assignment("model_providers.shamsul.name", "Shamsul"),
         "-c",
-        _toml_assignment("model_providers.fcc.base_url", _ensure_v1_url(api_url)),
+        _toml_assignment("model_providers.shamsul.base_url", _ensure_v1_url(api_url)),
         "-c",
-        _toml_assignment("model_providers.fcc.env_key", _CODEX_AUTH_ENV_KEY),
+        _toml_assignment("model_providers.shamsul.env_key", _CODEX_AUTH_ENV_KEY),
         "-c",
-        _toml_assignment("model_providers.fcc.wire_api", "responses"),
+        _toml_assignment("model_providers.shamsul.wire_api", "responses"),
     ]
     if model:
         args.extend(["-c", _toml_assignment("model", model)])

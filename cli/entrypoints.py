@@ -53,9 +53,15 @@ def serve() -> None:
 
 
 def _admin_browser_open_enabled() -> bool:
-    """Whether to open /admin when the server becomes reachable (FCC_OPEN_BROWSER)."""
+    """Whether to open /admin when the server becomes reachable (SHAMSUL_OPEN_BROWSER)."""
 
-    raw = os.environ.get("FCC_OPEN_BROWSER", "true").strip().lower()
+    raw = (
+        os.environ.get(
+            "SHAMSUL_OPEN_BROWSER", os.environ.get("FCC_OPEN_BROWSER", "true")
+        )
+        .strip()
+        .lower()
+    )
     return raw not in {"", "0", "false", "no"}
 
 
@@ -77,7 +83,7 @@ def _schedule_open_admin_browser(settings: Settings) -> None:
             time.sleep(0.15)
 
     threading.Thread(
-        target=open_when_ready, name="fcc-open-admin-browser", daemon=True
+        target=open_when_ready, name="shamsul-open-admin-browser", daemon=True
     ).start()
 
 

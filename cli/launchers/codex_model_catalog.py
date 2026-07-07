@@ -1,4 +1,4 @@
-"""Build Codex model catalogs from the FCC model-list route."""
+"""Build Codex model catalogs from the Shamsul model-list route."""
 
 import json
 import uuid
@@ -146,7 +146,7 @@ def _codex_catalog_entry(
     return {
         "slug": candidate.slug,
         "display_name": candidate.display_name,
-        "description": "Free Claude Code provider model",
+        "description": "Shamsul provider model",
         "default_reasoning_level": "medium",
         "supported_reasoning_levels": SUPPORTED_REASONING_LEVELS,
         "shell_type": "shell_command",

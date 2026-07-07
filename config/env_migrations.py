@@ -1,4 +1,4 @@
-"""One-time dotenv key migrations for FCC-owned config files."""
+"""One-time dotenv key migrations for Shamsul-owned config files."""
 
 import re
 from collections.abc import Mapping
@@ -52,7 +52,7 @@ def explicit_env_file_huggingface_warning(
     if not env_text_needs_migration(text, HUGGINGFACE_TOKEN_MIGRATION):
         return None
     return (
-        f"{LEGACY_HUGGINGFACE_TOKEN_ENV} is set in explicit FCC_ENV_FILE {path}. "
+        f"{LEGACY_HUGGINGFACE_TOKEN_ENV} is set in explicit SHAMSUL_ENV_FILE {path}. "
         f"Rename it to {HUGGINGFACE_API_KEY_ENV}; explicit env files are not "
         "rewritten automatically."
     )

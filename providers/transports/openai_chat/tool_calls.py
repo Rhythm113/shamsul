@@ -1,9 +1,7 @@
-"""OpenAI-chat tool-call assembly helpers."""
-
+import contextlib
 import json
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import suppress
 from typing import Any
 
 from core.anthropic.streaming import (
@@ -46,10 +44,10 @@ def repair_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any
         val = arguments[key]
         if isinstance(val, str):
             if key in int_keys:
-                with suppress(ValueError):
+                with contextlib.suppress(ValueError):
                     arguments[key] = int(val)
             elif key in float_keys:
-                with suppress(ValueError):
+                with contextlib.suppress(ValueError):
                     arguments[key] = float(val)
 
     return arguments

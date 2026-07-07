@@ -22,8 +22,8 @@ from providers.exceptions import (
 )
 from providers.rate_limit import GlobalRateLimiter
 
-_BODY_ATTR = "_fcc_provider_error_body"
-_BODY_TRUNCATED_ATTR = "_fcc_provider_error_body_truncated"
+_BODY_ATTR = "_shamsul_provider_error_body"
+_BODY_TRUNCATED_ATTR = "_shamsul_provider_error_body_truncated"
 
 
 @dataclass(frozen=True)

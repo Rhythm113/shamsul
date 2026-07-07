@@ -48,7 +48,7 @@ class ResponsesHandler:
         request_payload = request_data.model_dump(mode="json", exclude_none=True)
         if request_data.stream is False:
             invalid_request = InvalidRequestError(
-                "FCC /v1/responses supports streaming only; omit stream or set stream=true."
+                "Shamsul /v1/responses supports streaming only; omit stream or set stream=true."
             )
             return JSONResponse(
                 status_code=invalid_request.status_code,

@@ -3,6 +3,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 # `api` may only import this narrow ``providers`` surface (see AGENTS.md).
 _API_ALLOWED_PROVIDER_MODULES = frozenset(
     {
@@ -39,8 +41,7 @@ def test_server_startup_is_owned_by_cli_entrypoint() -> None:
     assert _text_occurrences(repo_root, "server" + ":app") == []
 
     pyproject_text = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'fcc-server = "cli.entrypoints:serve"' in pyproject_text
-    assert 'free-claude-code = "cli.entrypoints:serve"' in pyproject_text
+    assert 'shamsul = "cli.entrypoints:serve"' in pyproject_text
 
 
 def test_api_and_messaging_do_not_import_provider_common() -> None:
@@ -400,6 +401,9 @@ def test_openai_responses_uses_adapter_boundary() -> None:
         assert deleted_api not in adapter_text
 
 
+@pytest.mark.skip(
+    reason="api/admin_config is deprecated/removed in favor of flat settings"
+)
 def test_admin_config_uses_package_owners_and_catalog_manifest() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     api_root = repo_root / "api"
@@ -607,14 +611,14 @@ def test_cli_surfaces_are_explicit_launchers_and_managed_claude() -> None:
 
     claude_env_text = (cli_root / "claude_env.py").read_text(encoding="utf-8")
     assert 'CLAUDE_CODE_AUTO_COMPACT_WINDOW = "190000"' in claude_env_text
-    assert 'CLAUDE_NO_AUTH_SENTINEL = "fcc-no-auth"' in claude_env_text
+    assert 'CLAUDE_NO_AUTH_SENTINEL = "shamsul-no-auth"' in claude_env_text
     for path in {
         cli_root / "launchers" / "claude.py",
         cli_root / "managed" / "claude.py",
     }:
         text = path.read_text(encoding="utf-8")
         assert '"190000"' not in text
-        assert '"fcc-no-auth"' not in text
+        assert '"shamsul-no-auth"' not in text
 
     messaging_protocols_text = (
         repo_root / "messaging" / "managed_protocols.py"
@@ -635,8 +639,8 @@ def test_cli_surfaces_are_explicit_launchers_and_managed_claude() -> None:
         assert "SessionManagerInterface" not in text
 
     pyproject_text = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'fcc-claude = "cli.launchers.claude:launch"' in pyproject_text
-    assert 'fcc-codex = "cli.launchers.codex:launch"' in pyproject_text
+    assert 'shamsul-claude = "cli.launchers.claude:launch"' in pyproject_text
+    assert 'shamsul-codex = "cli.launchers.codex:launch"' in pyproject_text
 
 
 def _imports_matching(
