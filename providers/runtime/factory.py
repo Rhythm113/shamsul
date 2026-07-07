@@ -12,7 +12,7 @@ from providers.exceptions import UnknownProviderTypeError
 
 from .config import build_provider_config
 
-ProviderFactory = Callable[[ProviderConfig, Settings], BaseProvider]
+ProviderFactory = Callable[..., BaseProvider]
 
 
 def _create_ollama(config: ProviderConfig, _settings: Settings) -> BaseProvider:
@@ -21,8 +21,20 @@ def _create_ollama(config: ProviderConfig, _settings: Settings) -> BaseProvider:
     return OllamaProvider(config, settings=_settings)
 
 
+def _create_bridge(
+    config: ProviderConfig,
+    settings: Settings,
+    *,
+    provider_resolver: Callable[[str], BaseProvider] | None = None,
+) -> BaseProvider:
+    from providers.bridge.client import BridgeProvider
+
+    return BridgeProvider(config, settings=settings, provider_resolver=provider_resolver)
+
+
 PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
     "ollama": _create_ollama,
+    "bridge": _create_bridge,
 }
 
 if set(PROVIDER_CATALOG) != set(SUPPORTED_PROVIDER_IDS) or set(
@@ -35,7 +47,12 @@ if set(PROVIDER_CATALOG) != set(SUPPORTED_PROVIDER_IDS) or set(
     )
 
 
-def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
+def create_provider(
+    provider_id: str,
+    settings: Settings,
+    *,
+    provider_resolver: Callable[[str], BaseProvider] | None = None,
+) -> BaseProvider:
     """Create a provider instance for a supported provider id."""
     descriptor = PROVIDER_CATALOG.get(provider_id)
     if descriptor is None:
@@ -47,4 +64,11 @@ def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
     factory = PROVIDER_FACTORIES.get(provider_id)
     if factory is None:
         raise AssertionError(f"Unhandled provider descriptor: {provider_id}")
+    
+    if provider_id == "bridge":
+        return factory(
+            build_provider_config(descriptor, settings),
+            settings,
+            provider_resolver=provider_resolver,
+        )
     return factory(build_provider_config(descriptor, settings), settings)

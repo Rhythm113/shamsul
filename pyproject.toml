@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shamsul"
-version = "3.5.1"
+version = "3.6.3"
 description = "Middleware between Claude Code CLI (Anthropic API) and local Ollama reasoning/coding models"
 readme = "README.md"
 requires-python = ">=3.14.0"
@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
-shamsul = "cli.entrypoints:serve"
+shamsul-server = "cli.entrypoints:serve"
 shamsul-init = "cli.entrypoints:init"
 shamsul-claude = "cli.launchers.claude:launch"
 shamsul-codex = "cli.launchers.codex:launch"

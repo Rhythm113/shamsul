@@ -1,26 +1,25 @@
-# 🤖 shamsul-server
+# shamsul-server
 
-`shamsul-server` is a local, offline-first middleware between the **Claude Code CLI** and your local **Ollama** instance. It implements a server-side context-engineering workflow that splits agentic coding requests into two phases: a **Reasoning Lead Phase** and a **Coding Execution Phase**.
+shamsul-server is a local, offline-first middleware between the Claude Code CLI and your local Ollama instance. It implements a server-side context-engineering workflow that can route agentic coding requests dynamically using the Multi-Model Bridge orchestration system.
 
-It also features a beautiful, glassmorphic Web Control Center to manage configurations, download models, and edit system planning prompts in real-time.
+It features a web-based Control Center to manage configurations, download models, and edit system planning prompts in real-time.
 
 ---
 
 ## Key Features
-* **Double-Model context engineering**: Splits complex requests:
-  1. **Reasoning Lead** (e.g. `gemma2:9b` or `deepseek-r1:8b`) generates a step-by-step instruction plan.
-  2. **Coding Executor** (e.g. `qwen2.5-coder:7b`) consumes the plan to perform tool calls and write code.
+* **Multi-Model Bridge**: Route requests dynamically:
+  1. **Bridge Head Model** (Reasoning Lead, e.g. gemma:4b) parses instructions and generates a plan.
+  2. **Coding Executor** (e.g. qwen:3.5b) or **Tooling Executor** consumes the plan and runs tasks.
 * **100% Local & Private**: No external API keys or cloud dependencies.
-* **Web Control Center**: Interactive dashboard served at `http://localhost:8082/web` (and `/admin`) to change models and modify prompts.
+* **Web Control Center**: Interactive dashboard served at http://localhost:8082/web (and /admin) to select models and modify prompts.
 * **Integrated Model Downloader**: Download any model directly from the Ollama registry via the web dashboard.
-* **FastAPI Backend & Sse Streams**: Real-time plan streaming inside native Claude Code thinking blocks.
+* **FastAPI Backend & SSE Streams**: Real-time plan streaming inside native Claude Code thinking blocks.
 
 ---
 
 ## 1. System Requirements
-1. **Ollama**: Download and install it from [ollama.com](https://ollama.com). Ensure the Ollama service is running locally (`http://localhost:11434`).
-2. **Node.js & npm** (required to run the Claude Code client CLI):
-   * Install npm if not already installed, as it is required to fetch `@anthropic-ai/claude-code`.
+1. **Ollama**: Download and install it from ollama.com. Ensure the Ollama service is running locally (http://localhost:11434).
+2. **Node.js & npm** (required to run the Claude Code client CLI).
 
 ---
 
@@ -29,7 +28,7 @@ It also features a beautiful, glassmorphic Web Control Center to manage configur
 Clone the repository, navigate to the folder, and follow the setup instructions for your operating system:
 
 ### Windows (PowerShell)
-1. Install `uv` if not already present:
+1. Install uv if not already present:
    ```powershell
    irm https://astral.sh/uv/install.ps1 | iex
    ```
@@ -40,7 +39,7 @@ Clone the repository, navigate to the folder, and follow the setup instructions 
    *This installs Python 3.14.0, synchronizes local dependencies, and scaffolds the configuration files.*
 
 ### Linux & macOS (Bash)
-1. Install `uv` if not already present:
+1. Install uv if not already present:
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
@@ -55,46 +54,46 @@ Clone the repository, navigate to the folder, and follow the setup instructions 
 ## 3. Starting the Server
 
 Launch the FastAPI middleware server using the script corresponding to your platform:
-* **Windows Command Prompt**: Double-click or run `run.bat`
-* **Windows PowerShell**: Run `.\run.ps1`
-* **Linux & macOS**: Run `./run.sh`
+* **Windows Command Prompt**: Double-click or run run.bat
+* **Windows PowerShell**: Run .\run.ps1
+* **Linux & macOS**: Run ./run.sh
 
-The server will start listening at `http://localhost:8082`.
+The server will start listening at http://localhost:8082.
 
 ---
 
 ## 4. Web Control Center & Model Pulling
 
 Once the server is running, open your browser and navigate to:
-* **`http://localhost:8082/web`** (or `/admin` which automatically redirects)
+* **http://localhost:8082/web** (or /admin which automatically redirects)
 
 ### Model Installation Guide (Ollama)
-To run the server-side pipeline, you need both a reasoning model and a coding model pulled in Ollama.
+To run the server-side pipeline, you need reasoning and coding models pulled in Ollama.
 
 You can download them in two ways:
 1. **Via the Web Control Center**:
    * Go to the **Ollama Model Downloader** card at the bottom of the dashboard.
-   * Input the model name (e.g. `gemma2:9b` or `qwen2.5-coder:7b`) and click **Pull Model**.
+   * Input the model name (e.g. gemma:4b or qwen:3.5b) and click **Pull Model**.
 2. **Via Command Line**:
    * Open your terminal and run:
      ```bash
-     ollama pull gemma2:9b
-     ollama pull qwen2.5-coder:7b
+     ollama pull gemma:4b
+     ollama pull qwen:3.5b
      ```
 
 ### Recommended Model Pairs
 * **Standard (8GB - 12GB VRAM)**:
-  * Reasoning Lead: `gemma2:9b` or `deepseek-r1:8b`
-  * Coding Executor: `qwen2.5-coder:7b`
+  * Reasoning Lead: gemma:4b or deepseek-r1:8b
+  * Coding Executor: qwen:3.5b
 * **Resource Constrained (<8GB VRAM)**:
-  * Reasoning Lead: `llama3.2:3b`
-  * Coding Executor: `qwen2.5-coder:3b`
+  * Reasoning Lead: llama3.2:3b
+  * Coding Executor: qwen2.5-coder:3b
 
 ---
 
 ## 5. Global CLI Setup (Running Claude Code)
 
-To execute Claude Code through `shamsul-server` from anywhere on your system:
+To execute Claude Code through shamsul-server from anywhere on your system:
 
 1. **Install tools globally**:
    Run the following command in the project directory to register the launcher executables:
@@ -109,8 +108,8 @@ To execute Claude Code through `shamsul-server` from anywhere on your system:
 
 2. **Verify PATH Environment Variable**:
    Ensure that the global uv tool bin directory is in your user PATH variable:
-   * **Windows**: `%USERPROFILE%\.local\bin`
-   * **Linux/macOS**: `~/.local/bin`
+   * **Windows**: %USERPROFILE%\.local\bin
+   * **Linux/macOS**: ~/.local/bin
 
 3. **Launch**:
    * Start the server in one window with `shamsul-server`.

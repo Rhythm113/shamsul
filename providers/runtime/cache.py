@@ -7,7 +7,7 @@ from providers.base import BaseProvider
 
 from .factory import create_provider
 
-ProviderCreator = Callable[[str, Settings], BaseProvider]
+ProviderCreator = Callable[..., BaseProvider]
 
 
 class ProviderCache:
@@ -31,7 +31,11 @@ class ProviderCache:
     def get(self, provider_id: str) -> BaseProvider:
         """Return an existing provider or create it lazily."""
         if provider_id not in self._providers:
-            self._providers[provider_id] = self._creator(provider_id, self._settings)
+            self._providers[provider_id] = self._creator(
+                provider_id,
+                self._settings,
+                provider_resolver=lambda pid: self.get(pid),
+            )
         return self._providers[provider_id]
 
     async def cleanup(self) -> None:

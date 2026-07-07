@@ -68,6 +68,18 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             "local",
         ),
     ),
+    "bridge": ProviderDescriptor(
+        provider_id="bridge",
+        display_name="Shamsul Multi-Model Bridge",
+        transport_type="openai_chat",
+        static_credential="bridge",
+        capabilities=(
+            "chat",
+            "streaming",
+            "tools",
+            "thinking",
+        ),
+    ),
 }
 
 SUPPORTED_PROVIDER_IDS: tuple[str, ...] = tuple(PROVIDER_CATALOG.keys())

@@ -443,6 +443,46 @@
                 </div>
             </div>
 
+            <!-- Multi-Model Bridge Card -->
+            <div class="card col-12">
+                <div class="card-header">
+                    <h2 class="card-title">Shamsul Multi-Model Bridge Settings</h2>
+                    <span class="card-badge">Orchestration</span>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; width: 100%;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="bridge-head-model">Bridge Head Model (Reasoning)</label>
+                        <select id="bridge-head-model" required>
+                            <option value="" disabled selected>Loading installed models...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="bridge-coding-model">Bridge Coding Model (Executor)</label>
+                        <select id="bridge-coding-model" required>
+                            <option value="" disabled selected>Loading installed models...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="bridge-tooling-model">Bridge Tooling Model (Executor)</label>
+                        <select id="bridge-tooling-model" required>
+                            <option value="" disabled selected>Loading installed models...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bridge Instructions Card -->
+            <div class="card col-12">
+                <div class="card-header">
+                    <h2 class="card-title">Bridge Routing Instructions (instructions.md)</h2>
+                    <span class="card-badge">System Prompt</span>
+                </div>
+                <div class="form-group">
+                    <label for="bridge-instructions">Edit the instructions.md file that guides the Lead Reasoning Agent on when to delegate tasks:</label>
+                    <textarea id="bridge-instructions" rows="12" placeholder="# Multi-Model Bridge Instructions..." required style="font-family: monospace; font-size: 0.9rem; line-height: 1.4; width: 100%; box-sizing: border-box;"></textarea>
+                </div>
+            </div>
+
             <!-- Context Prompt Editor Card -->
             <div class="card col-12">
                 <div class="card-header">
@@ -517,21 +557,34 @@
                 
                 const rSelect = document.getElementById('reasoning-model');
                 const cSelect = document.getElementById('coding-model');
+                const bhSelect = document.getElementById('bridge-head-model');
+                const bcSelect = document.getElementById('bridge-coding-model');
+                const btSelect = document.getElementById('bridge-tooling-model');
                 
                 rSelect.innerHTML = '';
                 cSelect.innerHTML = '';
+                bhSelect.innerHTML = '';
+                bcSelect.innerHTML = '';
+                btSelect.innerHTML = '';
                 
                 if (models.length === 0) {
                     const noOption = '<option value="" disabled>No installed models found in Ollama. Make sure Ollama is running.</option>';
                     rSelect.innerHTML = noOption;
                     cSelect.innerHTML = noOption;
+                    bhSelect.innerHTML = noOption;
+                    bcSelect.innerHTML = noOption;
+                    btSelect.innerHTML = noOption;
                     return;
                 }
                 
                 models.forEach(model => {
-                    const optionHtml = `<option value="${model}">${model}</option>`;
-                    rSelect.insertAdjacentHTML('beforeend', optionHtml);
-                    cSelect.insertAdjacentHTML('beforeend', optionHtml);
+                    rSelect.insertAdjacentHTML('beforeend', `<option value="${model}">${model}</option>`);
+                    cSelect.insertAdjacentHTML('beforeend', `<option value="${model}">${model}</option>`);
+                    
+                    const fullModel = `ollama/${model}`;
+                    bhSelect.insertAdjacentHTML('beforeend', `<option value="${fullModel}">${fullModel}</option>`);
+                    bcSelect.insertAdjacentHTML('beforeend', `<option value="${fullModel}">${fullModel}</option>`);
+                    btSelect.insertAdjacentHTML('beforeend', `<option value="${fullModel}">${fullModel}</option>`);
                 });
             } catch (error) {
                 console.error('Failed to load local models:', error);
@@ -547,6 +600,9 @@
                 
                 const rSelect = document.getElementById('reasoning-model');
                 const cSelect = document.getElementById('coding-model');
+                const bhSelect = document.getElementById('bridge-head-model');
+                const bcSelect = document.getElementById('bridge-coding-model');
+                const btSelect = document.getElementById('bridge-tooling-model');
                 
                 // Select values if they are present in dropdown, otherwise append them as fallback options
                 if (config.ollama_reasoning_model) {
@@ -562,10 +618,36 @@
                     }
                     cSelect.value = config.ollama_coding_model;
                 }
+
+                if (config.bridge_head_model) {
+                    if (![...bhSelect.options].some(o => o.value === config.bridge_head_model)) {
+                        bhSelect.insertAdjacentHTML('beforeend', `<option value="${config.bridge_head_model}">${config.bridge_head_model} (configured but not pulled)</option>`);
+                    }
+                    bhSelect.value = config.bridge_head_model;
+                }
+
+                if (config.bridge_coding_model) {
+                    if (![...bcSelect.options].some(o => o.value === config.bridge_coding_model)) {
+                        bcSelect.insertAdjacentHTML('beforeend', `<option value="${config.bridge_coding_model}">${config.bridge_coding_model} (configured but not pulled)</option>`);
+                    }
+                    bcSelect.value = config.bridge_coding_model;
+                }
+
+                if (config.bridge_tooling_model) {
+                    if (![...btSelect.options].some(o => o.value === config.bridge_tooling_model)) {
+                        btSelect.insertAdjacentHTML('beforeend', `<option value="${config.bridge_tooling_model}">${config.bridge_tooling_model} (configured but not pulled)</option>`);
+                    }
+                    btSelect.value = config.bridge_tooling_model;
+                }
                 
                 document.getElementById('voice-model').value = config.ollama_voice_model || '';
                 document.getElementById('image-model').value = config.ollama_image_model || '';
                 document.getElementById('reasoning-prompt').value = config.ollama_reasoning_system_prompt || DEFAULT_PROMPT;
+
+                // Load instructions.md
+                const instructionsResponse = await fetch('/api/bridge/instructions');
+                const instructionsData = await instructionsResponse.json();
+                document.getElementById('bridge-instructions').value = instructionsData.instructions || '';
             } catch (error) {
                 console.error('Failed to load config:', error);
                 showToast('Failed to load current configuration.', 'error');
@@ -586,7 +668,10 @@
                 ollama_coding_model: document.getElementById('coding-model').value,
                 ollama_voice_model: document.getElementById('voice-model').value || null,
                 ollama_image_model: document.getElementById('image-model').value || null,
-                ollama_reasoning_system_prompt: document.getElementById('reasoning-prompt').value
+                ollama_reasoning_system_prompt: document.getElementById('reasoning-prompt').value,
+                bridge_head_model: document.getElementById('bridge-head-model').value,
+                bridge_coding_model: document.getElementById('bridge-coding-model').value,
+                bridge_tooling_model: document.getElementById('bridge-tooling-model').value
             };
             
             try {
@@ -596,7 +681,16 @@
                     body: JSON.stringify(payload)
                 });
                 
-                if (response.ok) {
+                const instrPayload = {
+                    instructions: document.getElementById('bridge-instructions').value
+                };
+                const responseInstr = await fetch('/api/bridge/instructions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(instrPayload)
+                });
+
+                if (response.ok && responseInstr.ok) {
                     showToast('Configuration successfully saved and reloaded!');
                 } else {
                     showToast('Failed to save configuration.', 'error');

@@ -87,6 +87,20 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="OLLAMA_IMAGE_MODEL",
     )
+
+    # ==================== Multi-Model Bridge Config ====================
+    bridge_head_model: str = Field(
+        default="ollama/gemma:4b",
+        validation_alias="BRIDGE_HEAD_MODEL",
+    )
+    bridge_coding_model: str = Field(
+        default="ollama/qwen:3.5b",
+        validation_alias="BRIDGE_CODING_MODEL",
+    )
+    bridge_tooling_model: str = Field(
+        default="ollama/gemma:4b",
+        validation_alias="BRIDGE_TOOLING_MODEL",
+    )
     ollama_reasoning_system_prompt: str = Field(
         default=(
             "You are the Lead Reasoning Agent. Your job is to analyze the user request and codebase context, "
@@ -106,7 +120,7 @@ class Settings(BaseSettings):
 
     # ==================== Model ====================
     # Fallback model reference
-    model: str = "ollama/qwen2.5-coder:7b"
+    model: str = "bridge/bridge"
 
     # Per-model overrides (optional)
     model_opus: str | None = Field(default=None, validation_alias="MODEL_OPUS")
@@ -283,6 +297,7 @@ class Settings(BaseSettings):
             "lmstudio",
             "llamacpp",
             "ollama",
+            "bridge",
         }
         if provider not in allowed:
             supported = ", ".join(f"'{p}'" for p in sorted(allowed))

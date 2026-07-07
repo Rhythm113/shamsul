@@ -201,6 +201,9 @@ async def api_get_config(settings: Settings = Depends(get_settings)):
         "ollama_voice_model": settings.ollama_voice_model or "",
         "ollama_image_model": settings.ollama_image_model or "",
         "ollama_reasoning_system_prompt": settings.ollama_reasoning_system_prompt,
+        "bridge_head_model": settings.bridge_head_model,
+        "bridge_coding_model": settings.bridge_coding_model,
+        "bridge_tooling_model": settings.bridge_tooling_model,
     }
 
 
@@ -210,6 +213,9 @@ class ConfigUpdatePayload(BaseModel):
     ollama_voice_model: str | None = None
     ollama_image_model: str | None = None
     ollama_reasoning_system_prompt: str
+    bridge_head_model: str
+    bridge_coding_model: str
+    bridge_tooling_model: str
 
 
 @router.post("/api/config")
@@ -224,6 +230,9 @@ async def api_post_config(payload: ConfigUpdatePayload):
         "OLLAMA_VOICE_MODEL": payload.ollama_voice_model or "",
         "OLLAMA_IMAGE_MODEL": payload.ollama_image_model or "",
         "OLLAMA_REASONING_SYSTEM_PROMPT": payload.ollama_reasoning_system_prompt,
+        "BRIDGE_HEAD_MODEL": payload.bridge_head_model,
+        "BRIDGE_CODING_MODEL": payload.bridge_coding_model,
+        "BRIDGE_TOOLING_MODEL": payload.bridge_tooling_model,
     }
 
     # Update env file
@@ -261,6 +270,32 @@ async def api_post_config(payload: ConfigUpdatePayload):
 
     clear_settings_cache()
 
+    return {"status": "ok"}
+
+
+class InstructionsUpdatePayload(BaseModel):
+    instructions: str
+
+
+@router.get("/api/bridge/instructions")
+async def api_get_bridge_instructions():
+    from config.paths import config_dir_path
+    from providers.bridge.client import DEFAULT_INSTRUCTIONS
+
+    path = config_dir_path() / "instructions.md"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(DEFAULT_INSTRUCTIONS, encoding="utf-8")
+    return {"instructions": path.read_text(encoding="utf-8")}
+
+
+@router.post("/api/bridge/instructions")
+async def api_post_bridge_instructions(payload: InstructionsUpdatePayload):
+    from config.paths import config_dir_path
+
+    path = config_dir_path() / "instructions.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload.instructions, encoding="utf-8")
     return {"status": "ok"}
 
 
