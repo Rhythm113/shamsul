@@ -219,7 +219,7 @@ class ConfigUpdatePayload(BaseModel):
 
 
 @router.post("/api/config")
-async def api_post_config(payload: ConfigUpdatePayload):
+async def api_post_config(payload: ConfigUpdatePayload, request: Request):
     import os
 
     from config.paths import managed_env_path
@@ -265,10 +265,25 @@ async def api_post_config(payload: ConfigUpdatePayload):
     for k, value in updates.items():
         os.environ[k] = value
 
-    # Clear settings cache
-    from config.settings import clear_settings_cache
+    # Clear settings cache and reload
+    from config.settings import clear_settings_cache, get_settings
 
     clear_settings_cache()
+    new_settings = get_settings()
+
+    # Safely clean up old provider runtime and initialize new one
+    old_runtime = getattr(request.app.state, "provider_runtime", None)
+    if old_runtime:
+        try:
+            await old_runtime.cleanup()
+        except Exception as e:
+            logger.warning("Failed to clean up old provider runtime: {}", e)
+
+    from providers.runtime import ProviderRuntime
+
+    new_runtime = ProviderRuntime(new_settings)
+    request.app.state.provider_runtime = new_runtime
+    new_runtime.start_model_list_refresh()
 
     return {"status": "ok"}
 
