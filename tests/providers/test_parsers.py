@@ -541,7 +541,7 @@ def test_heuristic_tool_parser_raw_json_mixed_with_web():
 def test_heuristic_tool_parser_strips_stray_xml_tags():
     """Test that stray XML tags (like duplicate or orphan closing tags) are stripped from filtered output."""
     parser = HeuristicToolParser()
-    text = "Hello </parameter> world </function> testing <parameter=foo> bar ● <function=Write>"
+    text = "Hello </parameter> world </function> testing <parameter=foo> bar ● <function=Write> and stray </file_path> and </content> but keep </div> HTML tag"
     filtered, tools = parser.feed(text)
     tools.extend(parser.flush())
 
@@ -549,4 +549,25 @@ def test_heuristic_tool_parser_strips_stray_xml_tags():
     assert "</function>" not in filtered
     assert "<parameter=foo>" not in filtered
     assert "● <function=Write>" not in filtered
-    assert filtered.strip().replace("  ", " ") == "Hello world testing bar"
+    assert "</file_path>" not in filtered
+    assert "</content>" not in filtered
+    assert "</div>" in filtered
+    assert "Hello" in filtered
+    assert "world" in filtered
+    assert "bar" in filtered
+
+
+def test_heuristic_tool_parser_dynamic_close_tags():
+    """Test that HeuristicToolParser supports parameters closed by matching tag names (e.g. </file_path>)."""
+    parser = HeuristicToolParser()
+    text = "● <function=Write><parameter=file_path>D:\\test\\index.html</file_path><parameter=content>my content</content>"
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "Write"
+    assert tools[0]["input"] == {
+        "file_path": "D:\\test\\index.html",
+        "content": "my content",
+    }
+    assert filtered.strip() == ""

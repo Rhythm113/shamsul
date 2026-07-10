@@ -237,3 +237,42 @@ def test_build_request_body_with_tools(ollama_provider):
     assert system_msg["role"] == "system"
     assert "Tool Calling Instructions" in system_msg["content"]
     assert "read_file" in system_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_stream_response_unloads_models(ollama_provider):
+    """Test that stream_response unloads both models at correct stages."""
+    req = MockRequest()
+
+    # Mock settings to have reasoning and coding models configured
+    ollama_provider._settings.ollama_reasoning_model = "gemma4:12b"
+    ollama_provider._settings.ollama_coding_model = "qwen3.5:9b"
+
+    mock_reasoning_chunk = MockChunk(content="Plan")
+
+    async def mock_reasoning_stream():
+        yield mock_reasoning_chunk
+
+    mock_coding_chunk_end = MockChunk(content="", finish_reason="stop")
+
+    async def mock_coding_stream():
+        yield mock_coding_chunk_end
+
+    with (
+        patch.object(
+            ollama_provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=[mock_reasoning_stream(), mock_coding_stream()],
+        ),
+        patch.object(
+            ollama_provider, "_unload_model", new_callable=AsyncMock
+        ) as mock_unload,
+    ):
+        events = [event async for event in ollama_provider.stream_response(req)]
+        assert len(events) > 0
+
+        # Verify unload calls
+        assert mock_unload.call_count == 2
+        mock_unload.assert_any_call("qwen3.5:9b")
+        mock_unload.assert_any_call("gemma4:12b")

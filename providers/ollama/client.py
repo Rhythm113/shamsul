@@ -201,6 +201,33 @@ class OllamaProvider(OpenAIChatTransport):
         self._settings = settings or get_settings()
         self._base_url = (config.base_url or OLLAMA_DEFAULT_BASE).rstrip("/")
 
+    async def _unload_model(self, model_name: str) -> None:
+        """Tell Ollama to unload the model from memory/VRAM by setting keep_alive to 0."""
+        if not model_name:
+            return
+        import httpx
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self._base_url}/api/chat",
+                    json={"model": model_name, "messages": [], "keep_alive": 0},
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    logger.debug(
+                        "Successfully unloaded model '{}' from Ollama memory.",
+                        model_name,
+                    )
+                else:
+                    logger.warning(
+                        "Unload request for model '{}' returned status {}",
+                        model_name,
+                        resp.status_code,
+                    )
+        except Exception as e:
+            logger.warning("Failed to unload model '{}': {}", model_name, e)
+
     def _build_request_body(
         self, request: Any, thinking_enabled: bool | None = None
     ) -> dict:
@@ -266,6 +293,10 @@ class OllamaProvider(OpenAIChatTransport):
             async for event in adapter.run():
                 yield event
             return
+
+        # Unload coding model to free VRAM/memory for reasoning model
+        if self._settings.ollama_coding_model:
+            await self._unload_model(self._settings.ollama_coding_model)
 
         # 1. Initialize ledger to emit thinking block events manually
         original_system = getattr(request, "system", "") or ""
@@ -392,6 +423,10 @@ class OllamaProvider(OpenAIChatTransport):
             f"Execute the step-by-step instructions from the Lead Reasoning Agent plan above using the active working directory."
         )
         request.system = guided_system
+
+        # Unload reasoning model to free VRAM/memory for coding model
+        if self._settings.ollama_reasoning_model:
+            await self._unload_model(self._settings.ollama_reasoning_model)
 
         # Switch to the coding model for execution
         request.model = self._settings.ollama_coding_model

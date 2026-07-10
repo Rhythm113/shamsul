@@ -30,13 +30,13 @@ class HeuristicToolParser:
 
     _FUNC_START_PATTERN = re.compile(r"●\s*<function=([^>]+)>")
     _PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>(.*?)(?:</parameter>|$)", re.DOTALL
+        r"<parameter=([^>]+)>(.*?)(?:</parameter>|</\1>|$)", re.DOTALL
     )
     _WEB_TOOL_JSON_PATTERN = re.compile(
         r"(?is)\b(?:use\s+)?(?P<tool>WebFetch|WebSearch)\b.*?(?P<json>\{.*?\})"
     )
     _STRAY_TAGS_RE = re.compile(
-        r"(</?parameter(?:=[^>]*)?>|</?function(?:=[^>]*)?>|●\s*<function=[^>]*>)"
+        r"(</?(?:parameter|function|file_path|content|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cwd)(?:=[^>]*)?>|●\s*<function=[^>]*>)"
     )
 
     def __init__(self):
@@ -198,17 +198,22 @@ class HeuristicToolParser:
 
                 while True:
                     param_match = self._PARAM_PATTERN.search(self._buffer)
-                    if param_match and "</parameter>" in param_match.group(0):
-                        pre_match_text = self._buffer[: param_match.start()]
-                        if pre_match_text:
-                            filtered_output_parts.append(pre_match_text)
+                    if param_match:
+                        matched_text = param_match.group(0)
+                        param_name = param_match.group(1)
+                        if matched_text.endswith(
+                            "</parameter>"
+                        ) or matched_text.endswith(f"</{param_name}>"):
+                            pre_match_text = self._buffer[: param_match.start()]
+                            if pre_match_text:
+                                filtered_output_parts.append(pre_match_text)
 
-                        key = param_match.group(1).strip()
-                        val = param_match.group(2).strip()
-                        self._current_parameters[key] = val
-                        self._buffer = self._buffer[param_match.end() :]
-                    else:
-                        break
+                            key = param_name.strip()
+                            val = param_match.group(2).strip()
+                            self._current_parameters[key] = val
+                            self._buffer = self._buffer[param_match.end() :]
+                            continue
+                    break
 
                 if "●" in self._buffer:
                     idx = self._buffer.find("●")
@@ -255,6 +260,11 @@ class HeuristicToolParser:
             for match in partial_matches:
                 key = match.group(1).strip()
                 val = match.group(2).strip()
+                # Strip trailing close tags if present
+                if val.endswith("</parameter>"):
+                    val = val[:-12].strip()
+                elif val.endswith(f"</{key}>"):
+                    val = val[: -(len(key) + 3)].strip()
                 self._current_parameters[key] = val
 
             detected_tools.append(

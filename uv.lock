@@ -1955,7 +1955,7 @@ wheels = [
 
 [[package]]
 name = "shamsul"
-version = "3.6.6"
+version = "3.6.8"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
