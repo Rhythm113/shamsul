@@ -29,7 +29,9 @@ def _create_bridge(
 ) -> BaseProvider:
     from providers.bridge.client import BridgeProvider
 
-    return BridgeProvider(config, settings=settings, provider_resolver=provider_resolver)
+    return BridgeProvider(
+        config, settings=settings, provider_resolver=provider_resolver
+    )
 
 
 PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
@@ -64,7 +66,7 @@ def create_provider(
     factory = PROVIDER_FACTORIES.get(provider_id)
     if factory is None:
         raise AssertionError(f"Unhandled provider descriptor: {provider_id}")
-    
+
     if provider_id == "bridge":
         return factory(
             build_provider_config(descriptor, settings),

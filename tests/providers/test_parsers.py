@@ -536,3 +536,17 @@ def test_heuristic_tool_parser_raw_json_mixed_with_web():
     assert tools[0]["input"] == {"AbsolutePath": "/tmp/a.txt"}
     assert tools[1]["name"] == "WebSearch"
     assert tools[1]["input"] == {"query": "test"}
+
+
+def test_heuristic_tool_parser_strips_stray_xml_tags():
+    """Test that stray XML tags (like duplicate or orphan closing tags) are stripped from filtered output."""
+    parser = HeuristicToolParser()
+    text = "Hello </parameter> world </function> testing <parameter=foo> bar ● <function=Write>"
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert "</parameter>" not in filtered
+    assert "</function>" not in filtered
+    assert "<parameter=foo>" not in filtered
+    assert "● <function=Write>" not in filtered
+    assert filtered.strip().replace("  ", " ") == "Hello world testing bar"

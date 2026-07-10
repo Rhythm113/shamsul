@@ -1,7 +1,8 @@
 """Tests for the virtual Multi-Model Bridge provider."""
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from config.settings import Settings
 from providers.base import ProviderConfig
@@ -35,7 +36,7 @@ class MockRequest:
 def test_tag_stripping_parser_with_thinking_and_delegate():
     """Test extracting tags and content using TagStrippingParser."""
     parser = TagStrippingParser()
-    
+
     # Chunk 1: regular thinking
     think, delegate, other = parser.feed("Some text <thinking>my thoughts")
     assert think == "my thoughts"
@@ -75,7 +76,7 @@ def test_append_system_prompt():
 
 def test_parse_sse_line():
     """Test parse_sse_line handles SSE format."""
-    sse_text = "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"hi\"}}\n\n"
+    sse_text = 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}\n\n'
     res = parse_sse_line(sse_text)
     assert res is not None
     event_type, payload = res
@@ -95,22 +96,24 @@ async def test_bridge_provider_stream_response():
 
     # Mock head provider
     mock_head_provider = MagicMock()
+
     async def mock_head_stream(*args, **kwargs):
         # Yields thinking delta and delegate tags
-        yield "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\"}}\n\n"
-        yield "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"<thinking>fixing code</thinking><delegate>coding</delegate>\"}}\n\n"
-        yield "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n"
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "<thinking>fixing code</thinking><delegate>coding</delegate>"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
 
     mock_head_provider.stream_response = MagicMock(side_effect=mock_head_stream)
 
     # Mock target provider
     mock_target_provider = MagicMock()
+
     async def mock_target_stream(*args, **kwargs):
         # Target starts with index 0
-        yield "event: message_start\ndata: {\"type\": \"message_start\"}\n\n"
-        yield "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\"}}\n\n"
-        yield "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"print('hello')\"}}\n\n"
-        yield "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n"
+        yield 'event: message_start\ndata: {"type": "message_start"}\n\n'
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "print(\'hello\')"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
 
     mock_target_provider.stream_response = MagicMock(side_effect=mock_target_stream)
 
@@ -118,7 +121,11 @@ async def test_bridge_provider_stream_response():
     def provider_resolver(prov_id):
         if prov_id == "ollama":
             # head uses gemma:4b (ollama), coding uses qwen:3.5b (ollama)
-            return mock_head_provider if mock_head_provider.stream_response.call_count == 0 else mock_target_provider
+            return (
+                mock_head_provider
+                if mock_head_provider.stream_response.call_count == 0
+                else mock_target_provider
+            )
         return mock_target_provider
 
     provider = BridgeProvider(config, settings, provider_resolver=provider_resolver)

@@ -1,8 +1,6 @@
-"""Multi-Model Bridge provider implementation."""
-
+import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -23,6 +21,7 @@ Your job is to analyze the user's request and the conversation history, think st
 ### Critical Tool Guidelines
 - **Prefer Dedicated Tools**: Always prefer dedicated file tools (like Glob, Read, Edit) over running shell commands. For listing files, always use Glob.
 - **POSIX/Bash Syntax Only**: The `Bash` tool ONLY supports Git Bash (POSIX sh) syntax, even on Windows. You MUST NEVER instruct or generate PowerShell commands (e.g., Get-ChildItem, Select-Object) or cmd.exe commands inside the `Bash` tool. Always use standard Unix commands (e.g., ls, cat, grep).
+- **No Manual Directory Changes**: Never instruct the delegate model to change directory using `cd` or `cd..` to run file listing or search commands. Always run list/search commands relative to the active directory, or use the dedicated listing tools.
 
 ### Output Format
 At the end of your response, you MUST output a delegation tag to route the task:
@@ -36,7 +35,9 @@ We need to edit the handler to fix a bug. This requires writing code, so I will 
 """
 
 
-def append_system_prompt(system_val: str | list | None, text_to_append: str) -> str | list:
+def append_system_prompt(
+    system_val: str | list | None, text_to_append: str
+) -> str | list:
     if not text_to_append:
         return system_val or ""
     if system_val is None:
@@ -44,7 +45,7 @@ def append_system_prompt(system_val: str | list | None, text_to_append: str) -> 
     if isinstance(system_val, str):
         return system_val + text_to_append
     if isinstance(system_val, list):
-        return list(system_val) + [{"type": "text", "text": text_to_append}]
+        return [*system_val, {"type": "text", "text": text_to_append}]
     return str(system_val) + text_to_append
 
 
@@ -72,7 +73,9 @@ class TagStrippingParser:
                     cutoff = len(self.buffer)
                     if "<" in self.buffer:
                         last_lt = self.buffer.rfind("<")
-                        if last_lt > len(self.buffer) - 12:  # max tag length (<thinking>)
+                        if (
+                            last_lt > len(self.buffer) - 12
+                        ):  # max tag length (<thinking>)
                             cutoff = last_lt
                     other_out += self.buffer[:cutoff]
                     self.buffer = self.buffer[cutoff:]
@@ -80,11 +83,11 @@ class TagStrippingParser:
 
                 if think_idx != -1 and (del_idx == -1 or think_idx < del_idx):
                     other_out += self.buffer[:think_idx]
-                    self.buffer = self.buffer[think_idx + len("<thinking>"):]
+                    self.buffer = self.buffer[think_idx + len("<thinking>") :]
                     self.in_thinking = True
                 else:
                     other_out += self.buffer[:del_idx]
-                    self.buffer = self.buffer[del_idx + len("<delegate>"):]
+                    self.buffer = self.buffer[del_idx + len("<delegate>") :]
                     self.in_delegate = True
 
             elif self.in_thinking:
@@ -100,7 +103,7 @@ class TagStrippingParser:
                     break
                 else:
                     thinking_out += self.buffer[:end_idx]
-                    self.buffer = self.buffer[end_idx + len("</thinking>"):]
+                    self.buffer = self.buffer[end_idx + len("</thinking>") :]
                     self.in_thinking = False
 
             elif self.in_delegate:
@@ -116,7 +119,7 @@ class TagStrippingParser:
                     break
                 else:
                     delegate_out += self.buffer[:end_idx]
-                    self.buffer = self.buffer[end_idx + len("</delegate>"):]
+                    self.buffer = self.buffer[end_idx + len("</delegate>") :]
                     self.in_delegate = False
 
         return thinking_out, delegate_out, other_out
@@ -135,10 +138,8 @@ def parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
             event_type = subline.partition("event:")[2].strip()
         elif subline.startswith("data:"):
             data_str = subline.partition("data:")[2].strip()
-            try:
+            with contextlib.suppress(Exception):
                 data_payload = json.loads(data_str)
-            except Exception:
-                pass
 
     if event_type and data_payload:
         return event_type, data_payload

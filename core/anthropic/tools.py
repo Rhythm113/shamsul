@@ -35,6 +35,9 @@ class HeuristicToolParser:
     _WEB_TOOL_JSON_PATTERN = re.compile(
         r"(?is)\b(?:use\s+)?(?P<tool>WebFetch|WebSearch)\b.*?(?P<json>\{.*?\})"
     )
+    _STRAY_TAGS_RE = re.compile(
+        r"(</?parameter(?:=[^>]*)?>|</?function(?:=[^>]*)?>|●\s*<function=[^>]*>)"
+    )
 
     def __init__(self):
         self._state = ParserState.TEXT
@@ -237,7 +240,9 @@ class HeuristicToolParser:
                 else:
                     break
 
-        return "".join(filtered_output_parts), detected_tools
+        filtered_text = "".join(filtered_output_parts)
+        filtered_text = self._STRAY_TAGS_RE.sub("", filtered_text)
+        return filtered_text, detected_tools
 
     def flush(self) -> list[dict[str, Any]]:
         """Flush any remaining tool call in the buffer."""
