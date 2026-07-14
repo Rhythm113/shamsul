@@ -14,6 +14,111 @@ from providers.transports.openai_chat.stream import OpenAIChatStreamAdapter
 from providers.transports.openai_chat.transport import OpenAIChatTransport
 
 
+def format_anthropic_messages_as_text(messages: list) -> list:
+    from copy import deepcopy
+
+    new_messages = []
+    for msg in messages:
+        # Create a copy so we don't mutate the original request
+        new_msg = deepcopy(msg)
+        is_dict = isinstance(new_msg, dict)
+
+        content = (
+            new_msg.get("content") if is_dict else getattr(new_msg, "content", None)
+        )
+        if isinstance(content, list):
+            new_content_parts = []
+            for block in content:
+                block_is_dict = isinstance(block, dict)
+                block_type = (
+                    block.get("type") if block_is_dict else getattr(block, "type", None)
+                )
+
+                if block_type == "text":
+                    text = (
+                        block.get("text", "")
+                        if block_is_dict
+                        else getattr(block, "text", "")
+                    )
+                    new_content_parts.append({"type": "text", "text": text})
+                elif block_type == "thinking":
+                    thinking = (
+                        block.get("thinking", "")
+                        if block_is_dict
+                        else getattr(block, "thinking", "")
+                    )
+                    new_content_parts.append(
+                        {"type": "text", "text": f"<think>\n{thinking}\n</think>"}
+                    )
+                elif block_type == "tool_use":
+                    name = (
+                        block.get("name")
+                        if block_is_dict
+                        else getattr(block, "name", "")
+                    )
+                    inp = (
+                        block.get("input")
+                        if block_is_dict
+                        else getattr(block, "input", {})
+                    )
+                    # Format as XML tool call format
+                    param_lines = []
+                    if isinstance(inp, dict):
+                        for k, v in inp.items():
+                            param_lines.append(f"<parameter={k}>{v}</parameter>")
+                    else:
+                        param_lines.append(str(inp))
+                    param_str = "\n".join(param_lines)
+                    tool_text = f"● <function={name}>\n{param_str}"
+                    new_content_parts.append({"type": "text", "text": tool_text})
+                elif block_type == "tool_result":
+                    content_val = (
+                        block.get("content")
+                        if block_is_dict
+                        else getattr(block, "content", "")
+                    )
+                    if isinstance(content_val, list):
+                        text_parts = []
+                        for sub_block in content_val:
+                            sub_is_dict = isinstance(sub_block, dict)
+                            sub_type = (
+                                sub_block.get("type")
+                                if sub_is_dict
+                                else getattr(sub_block, "type", None)
+                            )
+                            if sub_type == "text":
+                                text_parts.append(
+                                    sub_block.get("text", "")
+                                    if sub_is_dict
+                                    else getattr(sub_block, "text", "")
+                                )
+                            else:
+                                text_parts.append(str(sub_block))
+                        result_text = "\n".join(text_parts)
+                    else:
+                        result_text = str(content_val)
+                    new_content_parts.append(
+                        {"type": "text", "text": f"[Tool Result: {result_text}]"}
+                    )
+                else:
+                    new_content_parts.append(block)
+
+            if is_dict:
+                new_msg["content"] = new_content_parts
+            else:
+                new_msg.content = new_content_parts
+
+        role = new_msg.get("role") if is_dict else getattr(new_msg, "role", "")
+        if role == "tool":
+            if is_dict:
+                new_msg["role"] = "user"
+            else:
+                new_msg.role = "user"
+
+        new_messages.append(new_msg)
+    return new_messages
+
+
 def extract_working_directory(system_prompt: Any, messages: list) -> str | None:
     import re
 
@@ -55,7 +160,7 @@ def extract_working_directory(system_prompt: Any, messages: list) -> str | None:
     for pattern in patterns:
         match = re.search(pattern, text_to_search, re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            return match.group(1).strip().replace("\\", "/")
     return None
 
 
@@ -237,8 +342,15 @@ class OllamaProvider(OpenAIChatTransport):
         from providers.exceptions import InvalidRequestError
 
         try:
+            if hasattr(request, "model_copy"):
+                request_copy = request.model_copy(deep=True)
+            else:
+                from copy import deepcopy
+
+                request_copy = deepcopy(request)
+            request_copy.messages = format_anthropic_messages_as_text(request.messages)
             body = build_base_request_body(
-                request,
+                request_copy,
                 reasoning_replay=ReasoningReplayMode.DISABLED,
             )
             # Remove native tools to force text-based tool usage
