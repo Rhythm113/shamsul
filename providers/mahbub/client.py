@@ -8,7 +8,12 @@ from loguru import logger
 from config.paths import config_dir_path
 from config.settings import Settings
 from core.anthropic.streaming import AnthropicStreamLedger
-from providers.base import DEFAULT_INSTRUCTIONS, BaseProvider, ProviderConfig
+from providers.base import (
+    CRITICAL_EXECUTION_CONSTRAINTS,
+    DEFAULT_INSTRUCTIONS,
+    BaseProvider,
+    ProviderConfig,
+)
 
 
 def append_system_prompt(
@@ -264,6 +269,7 @@ class MahbubProvider(BaseProvider):
             f"--- LEAD REASONING AGENT GUIDANCE ---\n"
             f"{guidance_content}\n"
             f"--------------------------------------\n"
+            f"{CRITICAL_EXECUTION_CONSTRAINTS}"
         )
         target_req.system = append_system_prompt(target_req.system, guidance_header)
 

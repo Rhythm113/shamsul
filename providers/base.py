@@ -174,5 +174,16 @@ Example response format:
 We need to edit the handler to fix a bug. This requires writing code, so I will delegate to the coding executor.
 </thinking>
 <delegate>coding</delegate>
-\"\"\"
+"""
+
+
+CRITICAL_EXECUTION_CONSTRAINTS = """
+
+--- CRITICAL EXECUTION CONSTRAINTS ---
+1. DO NOT simulate tool execution or write mock logs (e.g., do not print 'Wrote X lines' or simulated success messages).
+2. You must call real tools using the exact format: ● <function=tool_name> followed by <parameter=key>value</parameter>.
+3. DO NOT output code inside markdown blocks if you are writing to a file; use the Write/Edit tools directly.
+4. DO NOT use Python-style function calls like Write(file_path) or custom tags like </function>.
+5. Do not output anything to simulate tool output or responses from the environment.
+--------------------------------------
 """

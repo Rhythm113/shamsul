@@ -126,6 +126,128 @@ class HeuristicToolParser:
             return "".join(result_parts).strip(), detected_tools
         return self._buffer, []
 
+    def _extract_python_style_tool_calls(self) -> tuple[str, list[dict[str, Any]]]:
+        """Detect Python-style tool calls: ● tool_name(param1="val1", param2="val2")"""
+        detected_tools = []
+        result_parts = []
+        pos = 0
+
+        while pos < len(self._buffer):
+            # Find the bullet and tool name followed by '('
+            match = re.search(r"●\s*(\w+)\(", self._buffer[pos:])
+            if not match:
+                result_parts.append(self._buffer[pos:])
+                break
+
+            start_idx = pos + match.start()
+            tool_name = match.group(1)
+
+            # Find the matching closing parenthesis ')' taking quotes into account
+            paren_start = pos + match.end() - 1
+            paren_end = -1
+            in_single_quote = False
+            in_double_quote = False
+            in_triple_double = False
+            in_triple_single = False
+
+            i = paren_start + 1
+            while i < len(self._buffer):
+                char = self._buffer[i]
+                if char == "\\" and i + 1 < len(self._buffer):
+                    i += 2
+                    continue
+
+                # Check triple quotes
+                if self._buffer[i : i + 3] == '"""':
+                    in_triple_double = not in_triple_double
+                    i += 3
+                    continue
+                if self._buffer[i : i + 3] == "'''":
+                    in_triple_single = not in_triple_single
+                    i += 3
+                    continue
+
+                if (
+                    char == '"'
+                    and not in_triple_double
+                    and not in_triple_single
+                    and not in_single_quote
+                ):
+                    in_double_quote = not in_double_quote
+                elif (
+                    char == "'"
+                    and not in_triple_double
+                    and not in_triple_single
+                    and not in_double_quote
+                ):
+                    in_single_quote = not in_single_quote
+                elif (
+                    char == ")"
+                    and not in_double_quote
+                    and not in_single_quote
+                    and not in_triple_double
+                    and not in_triple_single
+                ):
+                    paren_end = i
+                    break
+                i += 1
+
+            if paren_end == -1:
+                result_parts.append(self._buffer[pos : paren_start + 1])
+                pos = paren_start + 1
+                continue
+
+            args_str = self._buffer[paren_start + 1 : paren_end]
+
+            tool_input = {}
+            param_matches = re.finditer(
+                r"(\w+)\s*=\s*(?:\"\"\"(.*?)\"\"\"|'''(.*?)'''|\"(.*?)\"|'(.*?)'|([^,\s)]+))",
+                args_str,
+                re.DOTALL,
+            )
+            for pm in param_matches:
+                k = pm.group(1)
+                v = (
+                    pm.group(2)
+                    or pm.group(3)
+                    or pm.group(4)
+                    or pm.group(5)
+                    or pm.group(6)
+                )
+                if v is not None:
+                    tool_input[k] = v.strip()
+
+            if not tool_input and args_str.strip():
+                val = args_str.strip()
+                if (val.startswith('"') and val.endswith('"')) or (
+                    val.startswith("'") and val.endswith("'")
+                ):
+                    val = val[1:-1]
+                if tool_name in {"Write", "write_to_file", "view_file"}:
+                    tool_input["file_path"] = val
+                elif tool_name in {"run_command", "execute_command"}:
+                    tool_input["command"] = val
+
+            detected_tools.append(
+                {
+                    "type": "tool_use",
+                    "id": f"toolu_heuristic_{uuid.uuid4().hex[:8]}",
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+            )
+            logger.debug(
+                "Heuristic bypass: Detected Python-style tool call '{}'",
+                tool_name,
+            )
+
+            result_parts.append(self._buffer[pos:start_idx])
+            pos = paren_end + 1
+
+        if detected_tools:
+            return "".join(result_parts).strip(), detected_tools
+        return self._buffer, []
+
     def _strip_control_tokens(self, text: str) -> str:
         return _CONTROL_TOKEN_RE.sub("", text)
 
@@ -154,6 +276,11 @@ class HeuristicToolParser:
         web_text, web_tools = self._extract_web_tool_json_calls()
         self._buffer = web_text
         detected_tools.extend(web_tools)
+
+        # 3. Extract Python-style tool calls
+        py_text, py_tools = self._extract_python_style_tool_calls()
+        self._buffer = py_text
+        detected_tools.extend(py_tools)
 
         filtered_output_parts: list[str] = []
 

@@ -9,7 +9,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from config.provider_catalog import OLLAMA_DEFAULT_BASE
 from config.settings import Settings
 from core.anthropic.streaming import AnthropicStreamLedger
-from providers.base import ProviderConfig
+from providers.base import CRITICAL_EXECUTION_CONSTRAINTS, ProviderConfig
 from providers.transports.openai_chat.stream import OpenAIChatStreamAdapter
 from providers.transports.openai_chat.transport import OpenAIChatTransport
 
@@ -429,6 +429,7 @@ class OllamaProvider(OpenAIChatTransport):
             f"{reasoning_plan}\n\n"
             f"Active Working Directory: {working_dir if working_dir else 'Unknown'}\n"
             f"Execute the step-by-step instructions from the Lead Reasoning Agent plan above using the active working directory."
+            f"{CRITICAL_EXECUTION_CONSTRAINTS}"
         )
         request.system = guided_system
 

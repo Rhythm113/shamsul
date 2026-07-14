@@ -571,3 +571,32 @@ def test_heuristic_tool_parser_dynamic_close_tags():
         "content": "my content",
     }
     assert filtered.strip() == ""
+
+
+def test_heuristic_tool_parser_python_style_calls():
+    """Test that HeuristicToolParser parses Python-style function calls."""
+    parser = HeuristicToolParser()
+    text = '● Write(file_path="D:\\test\\index.html", code="""my content""")'
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "Write"
+    assert tools[0]["input"] == {
+        "file_path": "D:\\test\\index.html",
+        "code": "my content",
+    }
+    assert filtered.strip() == ""
+
+    # Test positional argument fallback
+    parser = HeuristicToolParser()
+    text = '● Write("D:\\test\\index.html")'
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "Write"
+    assert tools[0]["input"] == {
+        "file_path": "D:\\test\\index.html",
+    }
+    assert filtered.strip() == ""
