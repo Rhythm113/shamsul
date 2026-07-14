@@ -172,7 +172,7 @@ def test_cli_scripts_are_registered() -> None:
     )
 
     scripts = pyproject["project"]["scripts"]
-    assert scripts["shamsul"] == "cli.entrypoints:serve"
+    assert scripts["shamsul-server"] == "cli.entrypoints:serve"
     assert scripts["shamsul-init"] == "cli.entrypoints:init"
     assert scripts["shamsul-claude"] == "cli.launchers.claude:launch"
     assert scripts["shamsul-codex"] == "cli.launchers.codex:launch"

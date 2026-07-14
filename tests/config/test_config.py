@@ -39,7 +39,7 @@ class TestSettings:
         monkeypatch.delenv("HTTP_CONNECT_TIMEOUT", raising=False)
         monkeypatch.setitem(Settings.model_config, "env_file", ())
         settings = Settings()
-        assert settings.model == "ollama/qwen2.5-coder:7b"
+        assert settings.model == "mahbub/hybrid"
         assert isinstance(settings.provider_rate_limit, int)
         assert isinstance(settings.provider_rate_window, int)
         assert isinstance(settings.nim.temperature, float)

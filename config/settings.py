@@ -120,7 +120,7 @@ class Settings(BaseSettings):
 
     # ==================== Model ====================
     # Fallback model reference
-    model: str = "bridge/bridge"
+    model: str = "mahbub/hybrid"
 
     # Per-model overrides (optional)
     model_opus: str | None = Field(default=None, validation_alias="MODEL_OPUS")
@@ -297,7 +297,7 @@ class Settings(BaseSettings):
             "lmstudio",
             "llamacpp",
             "ollama",
-            "bridge",
+            "mahbub",
         }
         if provider not in allowed:
             supported = ", ".join(f"'{p}'" for p in sorted(allowed))

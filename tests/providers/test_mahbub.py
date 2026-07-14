@@ -6,7 +6,7 @@ import pytest
 
 from config.settings import Settings
 from providers.base import ProviderConfig
-from providers.bridge.client import BridgeProvider, TagStrippingParser, parse_sse_line
+from providers.mahbub.client import MahbubProvider, TagStrippingParser, parse_sse_line
 
 
 class MockMessage:
@@ -17,7 +17,7 @@ class MockMessage:
 
 class MockRequest:
     def __init__(self, **kwargs):
-        self.model = "bridge/bridge"
+        self.model = "mahbub/hybrid"
         self.messages = [MockMessage("user", "Write a python script")]
         self.system = "System prompt"
         self.tools = []
@@ -58,7 +58,7 @@ def test_tag_stripping_parser_with_thinking_and_delegate():
 
 def test_append_system_prompt():
     """Test append_system_prompt handles str, list, and None formats."""
-    from providers.bridge.client import append_system_prompt
+    from providers.mahbub.client import append_system_prompt
 
     # Test None input
     assert append_system_prompt(None, "instruction") == "instruction"
@@ -86,13 +86,13 @@ def test_parse_sse_line():
 
 @pytest.mark.asyncio
 async def test_bridge_provider_stream_response():
-    """Test BridgeProvider streams thinking block, decides, and delegates."""
+    """Test MahbubProvider streams thinking block, decides, and delegates."""
     settings = Settings(
         bridge_head_model="ollama/gemma:4b",
         bridge_coding_model="ollama/qwen:3.5b",
         bridge_tooling_model="ollama/gemma:4b",
     )
-    config = ProviderConfig(api_key="bridge")
+    config = ProviderConfig(api_key="mahbub")
 
     # Mock head provider
     mock_head_provider = MagicMock()
@@ -128,7 +128,7 @@ async def test_bridge_provider_stream_response():
             )
         return mock_target_provider
 
-    provider = BridgeProvider(config, settings, provider_resolver=provider_resolver)
+    provider = MahbubProvider(config, settings, provider_resolver=provider_resolver)
 
     req = MockRequest()
     events = [event async for event in provider.stream_response(req)]

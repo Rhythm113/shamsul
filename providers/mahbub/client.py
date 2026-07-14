@@ -8,31 +8,7 @@ from loguru import logger
 from config.paths import config_dir_path
 from config.settings import Settings
 from core.anthropic.streaming import AnthropicStreamLedger
-from providers.base import BaseProvider, ProviderConfig
-
-DEFAULT_INSTRUCTIONS = """# Multi-Model Bridge Instructions
-
-You are the Head Reasoning Agent of the Shamsul Multi-Model Bridge.
-Your job is to analyze the user's request and the conversation history, think step-by-step, and decide whether to delegate the task to the Coding Executor or the Tooling Executor.
-
-- Use the **Coding Executor** (`coding`) for tasks involving writing, editing, refactoring, explaining code, or software architecture questions.
-- Use the **Tooling Executor** (`tooling`) for tasks involving searching, running shell commands, checking files, or other tool executions.
-
-### Critical Tool Guidelines
-- **Prefer Dedicated Tools**: Always prefer dedicated file tools (like Glob, Read, Edit) over running shell commands. For listing files, always use Glob.
-- **POSIX/Bash Syntax Only**: The `Bash` tool ONLY supports Git Bash (POSIX sh) syntax, even on Windows. You MUST NEVER instruct or generate PowerShell commands (e.g., Get-ChildItem, Select-Object) or cmd.exe commands inside the `Bash` tool. Always use standard Unix commands (e.g., ls, cat, grep).
-- **No Manual Directory Changes**: Never instruct the delegate model to change directory using `cd` or `cd..` to run file listing or search commands. Always run list/search commands relative to the active directory, or use the dedicated listing tools.
-
-### Output Format
-At the end of your response, you MUST output a delegation tag to route the task:
-`<delegate>coding</delegate>` or `<delegate>tooling</delegate>`
-
-Example response format:
-<thinking>
-We need to edit the handler to fix a bug. This requires writing code, so I will delegate to the coding executor.
-</thinking>
-<delegate>coding</delegate>
-"""
+from providers.base import DEFAULT_INSTRUCTIONS, BaseProvider, ProviderConfig
 
 
 def append_system_prompt(
@@ -146,7 +122,7 @@ def parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
-class BridgeProvider(BaseProvider):
+class MahbubProvider(BaseProvider):
     """Virtual provider coordinating head model, coding model, and tooling model."""
 
     def __init__(
@@ -174,7 +150,7 @@ class BridgeProvider(BaseProvider):
 
     async def list_model_ids(self) -> frozenset[str]:
         """Return the virtual model id."""
-        return frozenset(["bridge"])
+        return frozenset(["hybrid"])
 
     async def stream_response(
         self,
@@ -186,7 +162,7 @@ class BridgeProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         """Stream response by running lead reasoning model first, then delegating."""
         if not self._provider_resolver:
-            raise RuntimeError("Provider resolver was not passed to BridgeProvider.")
+            raise RuntimeError("Provider resolver was not passed to MahbubProvider.")
 
         # 1. Resolve head model provider and model ID
         head_ref = self._settings.bridge_head_model
@@ -269,7 +245,7 @@ class BridgeProvider(BaseProvider):
             target_prov_id, target_model_id = "ollama", target_ref
 
         logger.info(
-            "Bridge routed task to {} model: {}/{}",
+            "Mahbub routed task to {} model: {}/{}",
             target,
             target_prov_id,
             target_model_id,
@@ -279,14 +255,16 @@ class BridgeProvider(BaseProvider):
         target_req = request.model_copy(deep=True)
         target_req.model = target_model_id
 
-        # Prepend guidance text if generated
-        guidance_header = ""
-        if guidance_text.strip():
-            guidance_header = (
-                f"\n\n--- LEAD REASONING AGENT GUIDANCE ---\n"
-                f"{guidance_text.strip()}\n"
-                f"--------------------------------------\n"
-            )
+        # Prepend guidance text and bridge delegation marker
+        guidance_content = (
+            guidance_text.strip() if guidance_text.strip() else "Direct execution."
+        )
+        guidance_header = (
+            f"\n\n--- BRIDGE DELEGATION ACTIVE ---\n"
+            f"--- LEAD REASONING AGENT GUIDANCE ---\n"
+            f"{guidance_content}\n"
+            f"--------------------------------------\n"
+        )
         target_req.system = append_system_prompt(target_req.system, guidance_header)
 
         target_provider = self._provider_resolver(target_prov_id)

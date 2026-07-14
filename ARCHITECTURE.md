@@ -17,16 +17,16 @@ shamsul-server sits between the Claude Code client and local Ollama instances. W
 Exposes the Anthropic-compatible Messages API (`/v1/messages`) and the configuration API endpoints. It decodes the incoming requests, invokes the Model Router to select the backend model, and returns a Server-Sent Events (SSE) stream back to the client.
 
 ### 2.2 Model Router (api/model_router.py)
-Maps requested Claude model names (e.g. `claude-opus-4-8`) to corresponding backend models configured in the environment settings (e.g. `bridge/bridge`).
+Maps requested Claude model names (e.g. `claude-opus-4-8`) to corresponding backend models configured in the environment settings (e.g. `mahbub/hybrid`).
 
 ### 2.3 Provider runtime (providers/runtime/)
-A dynamic provider cache and factory system that initializes and registers different model completion providers (e.g. Ollama, Gemini, Vercel, and the virtual Bridge provider).
+A dynamic provider cache and factory system that initializes and registers different model completion providers (e.g. Ollama, Gemini, Vercel, and the virtual Mahbub Hybrid provider).
 
 ---
 
 ## 3. Multi-Model Bridge Orchestration
 
-The Multi-Model Bridge (implemented in `providers/bridge/client.py`) coordinates multiple specialized models to fulfill a request as if they were a single virtual model.
+The Multi-Model Bridge (implemented in `providers/mahbub/client.py`) coordinates multiple specialized models to fulfill a request as if they were a single virtual model.
 
 ### 3.1 Two-Stage Pipeline Execution
 
@@ -53,7 +53,7 @@ A custom stream parser that reads incoming tokens chunk-by-chunk. It isolates an
 
 - **api/routes.py**: Contains endpoints for configuration, system status, and Anthropic API handling.
 - **config/settings.py**: Handles environment configuration load/save validations using Pydantic Settings.
-- **providers/bridge/client.py**: Core virtual Bridge provider orchestrating the Head, Coding, and Tooling providers.
+- **providers/mahbub/client.py**: Core virtual Mahbub Hybrid provider orchestrating the Head, Coding, and Tooling providers.
 - **providers/runtime/cache.py**: Caches and resolves active provider clients at request time.
 - **providers/runtime/factory.py**: Factory definitions creating instances of provider classes.
 - **web/index.html**: Web UI Control Center for updating settings and instructions.

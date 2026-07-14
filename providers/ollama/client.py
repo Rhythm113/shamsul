@@ -280,9 +280,17 @@ class OllamaProvider(OpenAIChatTransport):
 
         # Verify we have messages to perform reasoning on
         messages = getattr(request, "messages", [])
-        if not messages or not self._settings.ollama_reasoning_model:
+        original_system = getattr(request, "system", "") or ""
+        is_bridge_delegated = "--- BRIDGE DELEGATION ACTIVE ---" in original_system
+
+        if (
+            not messages
+            or not self._settings.ollama_reasoning_model
+            or is_bridge_delegated
+        ):
             # Skip reasoning phase and stream directly
-            request.model = self._settings.ollama_coding_model
+            if not is_bridge_delegated:
+                request.model = self._settings.ollama_coding_model
             adapter = OpenAIChatStreamAdapter(
                 self,
                 request=request,

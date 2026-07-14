@@ -21,22 +21,22 @@ def _create_ollama(config: ProviderConfig, _settings: Settings) -> BaseProvider:
     return OllamaProvider(config, settings=_settings)
 
 
-def _create_bridge(
+def _create_mahbub(
     config: ProviderConfig,
     settings: Settings,
     *,
     provider_resolver: Callable[[str], BaseProvider] | None = None,
 ) -> BaseProvider:
-    from providers.bridge.client import BridgeProvider
+    from providers.mahbub.client import MahbubProvider
 
-    return BridgeProvider(
+    return MahbubProvider(
         config, settings=settings, provider_resolver=provider_resolver
     )
 
 
 PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
     "ollama": _create_ollama,
-    "bridge": _create_bridge,
+    "mahbub": _create_mahbub,
 }
 
 if set(PROVIDER_CATALOG) != set(SUPPORTED_PROVIDER_IDS) or set(
@@ -67,7 +67,7 @@ def create_provider(
     if factory is None:
         raise AssertionError(f"Unhandled provider descriptor: {provider_id}")
 
-    if provider_id == "bridge":
+    if provider_id == "mahbub":
         return factory(
             build_provider_config(descriptor, settings),
             settings,

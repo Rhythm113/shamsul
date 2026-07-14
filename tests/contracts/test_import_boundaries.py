@@ -41,7 +41,7 @@ def test_server_startup_is_owned_by_cli_entrypoint() -> None:
     assert _text_occurrences(repo_root, "server" + ":app") == []
 
     pyproject_text = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'shamsul = "cli.entrypoints:serve"' in pyproject_text
+    assert 'shamsul-server = "cli.entrypoints:serve"' in pyproject_text
 
 
 def test_api_and_messaging_do_not_import_provider_common() -> None:

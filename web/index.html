@@ -483,20 +483,8 @@
                 </div>
             </div>
 
-            <!-- Context Prompt Editor Card -->
-            <div class="card col-12">
-                <div class="card-header">
-                    <h2 class="card-title">Lead Reasoning System Prompt</h2>
-                    <span class="card-badge">Context engineering</span>
-                </div>
-                <div class="form-group">
-                    <label for="reasoning-prompt">Instructions for the Reasoning Lead Agent</label>
-                    <textarea id="reasoning-prompt" required placeholder="Type the planning instructions here..."></textarea>
-                </div>
-                <div class="btn-row">
-                    <button type="button" class="btn btn-outline" onclick="resetDefaultPrompt()">Reset to Default</button>
-                    <button type="submit" id="save-btn" class="btn">Save Configurations</button>
-                </div>
+            <div class="col-12 btn-row" style="margin-top: 1rem;">
+                <button type="submit" id="save-btn" class="btn">Save Configurations</button>
             </div>
         </form>
 
@@ -526,6 +514,7 @@
 
     <script>
         const DEFAULT_PROMPT = `You are the Lead Reasoning Agent. Your job is to analyze the user request and codebase context, and construct a precise, step-by-step instruction plan for the Coding Agent to execute. Detail the required logic, edge cases, and which tools (e.g. read_file, replace_file_content) should be used. Keep your response highly structured, action-oriented, and focused on planning. Do not write the code itself, just guide the execution agent.`;
+        let activeReasoningPrompt = DEFAULT_PROMPT;
 
         // Initialize values on load
         window.addEventListener('DOMContentLoaded', async () => {
@@ -642,7 +631,7 @@
                 
                 document.getElementById('voice-model').value = config.ollama_voice_model || '';
                 document.getElementById('image-model').value = config.ollama_image_model || '';
-                document.getElementById('reasoning-prompt').value = config.ollama_reasoning_system_prompt || DEFAULT_PROMPT;
+                activeReasoningPrompt = config.ollama_reasoning_system_prompt || DEFAULT_PROMPT;
 
                 // Load instructions.md
                 const instructionsResponse = await fetch('/api/bridge/instructions');
@@ -668,7 +657,7 @@
                 ollama_coding_model: document.getElementById('coding-model').value,
                 ollama_voice_model: document.getElementById('voice-model').value || null,
                 ollama_image_model: document.getElementById('image-model').value || null,
-                ollama_reasoning_system_prompt: document.getElementById('reasoning-prompt').value,
+                ollama_reasoning_system_prompt: activeReasoningPrompt,
                 bridge_head_model: document.getElementById('bridge-head-model').value,
                 bridge_coding_model: document.getElementById('bridge-coding-model').value,
                 bridge_tooling_model: document.getElementById('bridge-tooling-model').value
@@ -704,10 +693,6 @@
             }
         }
 
-        // Reset text area to default planning instructions
-        function resetDefaultPrompt() {
-            document.getElementById('reasoning-prompt').value = DEFAULT_PROMPT;
-            showToast('Prompt reset to default instructions.');
         }
 
         // Pull model from Ollama registry

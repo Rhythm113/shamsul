@@ -68,11 +68,11 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             "local",
         ),
     ),
-    "bridge": ProviderDescriptor(
-        provider_id="bridge",
-        display_name="Shamsul Multi-Model Bridge",
+    "mahbub": ProviderDescriptor(
+        provider_id="mahbub",
+        display_name="Mahbub Hybrid",
         transport_type="openai_chat",
-        static_credential="bridge",
+        static_credential="mahbub",
         capabilities=(
             "chat",
             "streaming",

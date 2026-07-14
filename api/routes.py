@@ -295,7 +295,7 @@ class InstructionsUpdatePayload(BaseModel):
 @router.get("/api/bridge/instructions")
 async def api_get_bridge_instructions():
     from config.paths import config_dir_path
-    from providers.bridge.client import DEFAULT_INSTRUCTIONS
+    from providers.base import DEFAULT_INSTRUCTIONS
 
     path = config_dir_path() / "instructions.md"
     if not path.exists():
