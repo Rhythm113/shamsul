@@ -204,6 +204,10 @@ async def api_get_config(settings: Settings = Depends(get_settings)):
         "bridge_head_model": settings.bridge_head_model,
         "bridge_coding_model": settings.bridge_coding_model,
         "bridge_tooling_model": settings.bridge_tooling_model,
+        "context_recent_turns": settings.context_recent_turns,
+        "context_max_result_chars": settings.context_max_result_chars,
+        "context_max_write_lines": settings.context_max_write_lines,
+        "context_head_recent_turns": settings.context_head_recent_turns,
     }
 
 
@@ -216,6 +220,10 @@ class ConfigUpdatePayload(BaseModel):
     bridge_head_model: str
     bridge_coding_model: str
     bridge_tooling_model: str
+    context_recent_turns: int = 3
+    context_max_result_chars: int = 3000
+    context_max_write_lines: int = 10
+    context_head_recent_turns: int = 5
 
 
 @router.post("/api/config")
@@ -233,6 +241,10 @@ async def api_post_config(payload: ConfigUpdatePayload, request: Request):
         "BRIDGE_HEAD_MODEL": payload.bridge_head_model,
         "BRIDGE_CODING_MODEL": payload.bridge_coding_model,
         "BRIDGE_TOOLING_MODEL": payload.bridge_tooling_model,
+        "CONTEXT_RECENT_TURNS": str(payload.context_recent_turns),
+        "CONTEXT_MAX_RESULT_CHARS": str(payload.context_max_result_chars),
+        "CONTEXT_MAX_WRITE_LINES": str(payload.context_max_write_lines),
+        "CONTEXT_HEAD_RECENT_TURNS": str(payload.context_head_recent_turns),
     }
 
     # Update env file

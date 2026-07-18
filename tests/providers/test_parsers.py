@@ -636,3 +636,28 @@ def test_heuristic_tool_parser_unregistered_tools():
 
     assert len(tools) == 0
     assert "src" in filtered
+
+
+def test_heuristic_tool_parser_namespaced_allowed_tools():
+    """Test that HeuristicToolParser resolves namespaced allowed tool names (e.g. default_api:write_to_file)."""
+    allowed = {"default_api:write_to_file", "default_api:run_command"}
+
+    # 1. XML style
+    parser = HeuristicToolParser(allowed_tool_names=allowed)
+    text = "● <function=Write><parameter=file_path>index.html</parameter><parameter=code>content</parameter>"
+    _, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "default_api:write_to_file"
+    assert tools[0]["input"] == {"file_path": "index.html", "code": "content"}
+
+    # 2. Python style
+    parser = HeuristicToolParser(allowed_tool_names=allowed)
+    text = '● Write(file_path="index.html", code="content")'
+    _, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "default_api:write_to_file"
+    assert tools[0]["input"] == {"file_path": "index.html", "code": "content"}

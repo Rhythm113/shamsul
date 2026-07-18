@@ -128,13 +128,18 @@ def test_init_uses_default_api_key(ollama_config):
 
 
 def test_build_request_body(ollama_provider):
-    """Test building request body."""
+    """Test building request body with compressed system prompt."""
     req = MockRequest()
     body = ollama_provider._build_request_body(req)
     assert body["model"] == "llama3.1:8b"
     assert len(body["messages"]) == 2
     assert body["messages"][0]["role"] == "system"
-    assert body["messages"][0]["content"] == "System prompt"
+    # System prompt should be compressed, not the original verbatim "System prompt"
+    system_content = body["messages"][0]["content"]
+    assert "You are a helpful coding assistant" in system_content
+    assert "CRITICAL EXECUTION CONSTRAINTS" in system_content
+    # Original bloated prompt should be stripped
+    assert system_content != "System prompt"
     assert body["messages"][1]["role"] == "user"
     assert body["messages"][1]["content"] == "Hello"
 
@@ -204,7 +209,7 @@ def test_format_tools_as_text():
     formatted = _format_tools_as_text(tools)
     assert "# Tool Calling Instructions" in formatted
     assert "● <function=tool_name>" in formatted
-    assert "read_file(AbsolutePath* (string), StartLine (integer))" in formatted
+    assert "read_file(AbsolutePath*:str, StartLine:int)" in formatted
     assert "Read file contents" in formatted
 
 
@@ -276,3 +281,65 @@ async def test_stream_response_unloads_models(ollama_provider):
         assert mock_unload.call_count == 2
         mock_unload.assert_any_call("qwen3.5:9b")
         mock_unload.assert_any_call("gemma4:12b")
+
+
+def test_extract_working_directory():
+    """Test that extract_working_directory parses both dict and object messages successfully."""
+    from providers.ollama.client import extract_working_directory
+
+    # 1. Dict style message
+    dict_msgs = [
+        {"role": "user", "content": "The working directory is D:\\NSU\\cse327\\project"}
+    ]
+    dir_dict = extract_working_directory("", dict_msgs)
+    assert dir_dict == "D:/NSU/cse327/project"
+
+    # 2. Object style message
+    class ObjectMessage:
+        def __init__(self, role, content):
+            self.role = role
+            self.content = content
+
+    obj_msgs = [
+        ObjectMessage("user", "The working directory is D:\\NSU\\cse327\\project")
+    ]
+    dir_obj = extract_working_directory("", obj_msgs)
+    assert dir_obj == "D:/NSU/cse327/project"
+
+
+def test_compress_system_prompt():
+    """Test that compress_system_prompt extracts key information and discards Claude instructions."""
+    from providers.ollama.client import compress_system_prompt
+
+    system_prompt = (
+        "You are Claude Code, Anthropic's official CLI for Claude.\n\n"
+        "You are an interactive agent that helps users with software engineering tasks.\n\n"
+        "# Environment\n"
+        "You have been invoked in the following environment:\n"
+        " - Primary working directory: D:\\NSU\\cse327\\test\n"
+        " - Is a git repository: false\n"
+        " - Platform: win32\n"
+        " - Shell: PowerShell (primary); Bash tool also available\n"
+        " - OS Version: Windows 10 Pro 10.0.19045\n"
+    )
+
+    compressed = compress_system_prompt(system_prompt)
+    assert "You are a helpful coding assistant" in compressed
+    assert "Platform: win32" in compressed
+    assert "Shell: PowerShell (primary)" in compressed
+    assert "Working Directory: D:\\NSU\\cse327\\test" in compressed
+    assert "Git repository: false" in compressed
+    assert "You are Claude Code" not in compressed
+    assert "interactive agent that helps" not in compressed
+
+
+def test_detect_os_platform():
+    """Test that detect_os_platform correctly identifies windows, darwin/macos, and linux."""
+    from providers.ollama.client import detect_os_platform
+
+    assert detect_os_platform("Platform: win32") == "windows"
+    assert detect_os_platform("Platform: windows") == "windows"
+    assert detect_os_platform("Platform: darwin") == "darwin"
+    assert detect_os_platform("Platform: macOS") == "darwin"
+    assert detect_os_platform("Platform: linux") == "linux"
+    assert detect_os_platform(None) == "linux"

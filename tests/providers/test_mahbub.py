@@ -147,3 +147,174 @@ async def test_bridge_provider_stream_response():
     assert '"index": 1' in full_output
     assert "print('hello')" in full_output
     assert "fixing code" in full_output
+
+
+@pytest.mark.asyncio
+async def test_mahbub_provider_target_tool_use():
+    """Test MahbubProvider re-indexes tool_use blocks from target correctly."""
+    settings = Settings(
+        bridge_head_model="ollama/gemma:4b",
+        bridge_coding_model="ollama/qwen:3.5b",
+        bridge_tooling_model="ollama/gemma:4b",
+    )
+    config = ProviderConfig(api_key="mahbub")
+
+    mock_head_provider = MagicMock()
+
+    async def mock_head_stream(*args, **kwargs):
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "<thinking>need to search</thinking><delegate>tooling</delegate>"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+
+    mock_head_provider.stream_response = MagicMock(side_effect=mock_head_stream)
+
+    mock_target_provider = MagicMock()
+
+    async def mock_target_stream(*args, **kwargs):
+        # Target produces a text block first, then a tool_use block
+        yield 'event: message_start\ndata: {"type": "message_start"}\n\n'
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Let me search"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_test", "name": "WebSearch", "input": {}}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\\"query\\": \\"claude code\\"}"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 1}\n\n'
+        yield 'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, "usage": {"input_tokens": 50, "output_tokens": 20}}\n\n'
+        yield 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+
+    mock_target_provider.stream_response = MagicMock(side_effect=mock_target_stream)
+
+    call_count = 0
+
+    def provider_resolver(prov_id):
+        nonlocal call_count
+        call_count += 1
+        return mock_head_provider if call_count == 1 else mock_target_provider
+
+    provider = MahbubProvider(config, settings, provider_resolver=provider_resolver)
+    req = MockRequest()
+    events = [event async for event in provider.stream_response(req)]
+
+    full_output = "".join(events)
+
+    # Verify head thinking block at index 0
+    assert '"index": 0' in full_output
+    assert "need to search" in full_output
+
+    # Verify target text block re-indexed to 1
+    assert '"index": 1' in full_output
+    assert "Let me search" in full_output
+
+    # Verify target tool_use block re-indexed to 2
+    assert '"index": 2' in full_output
+    assert '"id": "toolu_test"' in full_output
+    assert '"name": "WebSearch"' in full_output
+    assert '"partial_json"' in full_output
+    assert "query" in full_output
+
+    # Verify message_delta and message_stop are present
+    assert "event: message_delta" in full_output
+    assert "event: message_stop" in full_output
+    assert '"stop_reason": "tool_use"' in full_output
+
+
+@pytest.mark.asyncio
+async def test_mahbub_provider_target_stream_error():
+    """Test MahbubProvider handles target stream errors gracefully."""
+    settings = Settings(
+        bridge_head_model="ollama/gemma:4b",
+        bridge_coding_model="ollama/qwen:3.5b",
+        bridge_tooling_model="ollama/gemma:4b",
+    )
+    config = ProviderConfig(api_key="mahbub")
+
+    mock_head_provider = MagicMock()
+
+    async def mock_head_stream(*args, **kwargs):
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "<thinking>fixing code</thinking><delegate>coding</delegate>"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+
+    mock_head_provider.stream_response = MagicMock(side_effect=mock_head_stream)
+
+    mock_target_provider = MagicMock()
+
+    async def mock_failing_stream(*args, **kwargs):
+        yield 'event: message_start\ndata: {"type": "message_start"}\n\n'
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        # Stream fails partway through
+        raise RuntimeError("Model crashed: OOM")
+
+    mock_target_provider.stream_response = MagicMock(side_effect=mock_failing_stream)
+
+    def provider_resolver(prov_id):
+        return (
+            mock_head_provider
+            if mock_head_provider.stream_response.call_count == 0
+            else mock_target_provider
+        )
+
+    provider = MahbubProvider(config, settings, provider_resolver=provider_resolver)
+    req = MockRequest()
+    events = [event async for event in provider.stream_response(req)]
+
+    full_output = "".join(events)
+
+    # Verify an error event was emitted
+    assert "event: error" in full_output
+    # Verify the stream was properly closed
+    assert "event: message_delta" in full_output
+    assert "event: message_stop" in full_output
+
+    # Ensure both head and target were called
+    assert mock_head_provider.stream_response.call_count == 1
+    assert mock_target_provider.stream_response.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_mahbub_provider_missing_message_close():
+    """Test MahbubProvider finalizes the stream when target omits message_delta/stop."""
+    settings = Settings(
+        bridge_head_model="ollama/gemma:4b",
+        bridge_coding_model="ollama/qwen:3.5b",
+        bridge_tooling_model="ollama/gemma:4b",
+    )
+    config = ProviderConfig(api_key="mahbub")
+
+    mock_head_provider = MagicMock()
+
+    async def mock_head_stream(*args, **kwargs):
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "<thinking>just do it</thinking><delegate>coding</delegate>"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+
+    mock_head_provider.stream_response = MagicMock(side_effect=mock_head_stream)
+
+    mock_target_provider = MagicMock()
+
+    async def mock_target_no_close(*args, **kwargs):
+        # Target emits content blocks but NO message_delta / message_stop
+        yield 'event: message_start\ndata: {"type": "message_start"}\n\n'
+        yield 'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}\n\n'
+        yield 'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "done"}}\n\n'
+        yield 'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+        # No message_delta or message_stop!
+
+    mock_target_provider.stream_response = MagicMock(side_effect=mock_target_no_close)
+
+    def provider_resolver(prov_id):
+        return (
+            mock_head_provider
+            if mock_head_provider.stream_response.call_count == 0
+            else mock_target_provider
+        )
+
+    provider = MahbubProvider(config, settings, provider_resolver=provider_resolver)
+    req = MockRequest()
+    events = [event async for event in provider.stream_response(req)]
+
+    full_output = "".join(events)
+
+    # The provider should have emitted close-out events
+    assert "event: message_delta" in full_output
+    assert "event: message_stop" in full_output

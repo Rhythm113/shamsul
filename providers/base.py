@@ -185,5 +185,10 @@ CRITICAL_EXECUTION_CONSTRAINTS = """
 3. DO NOT output code inside markdown blocks if you are writing to a file; use the Write/Edit tools directly.
 4. DO NOT use Python-style function calls like Write(file_path) or custom tags like </function>.
 5. Do not output anything to simulate tool output or responses from the environment.
+6. NEVER invent, fabricate, or hallucinate file contents, command outputs, or tool results. If you don't know something, use a tool to find out.
+7. NEVER claim to have completed actions you did not perform. Only report real tool call results.
+8. If you are unsure what to do, call ONE tool at a time and wait for its result before proceeding.
+9. Keep your response focused on exactly ONE step at a time. Do not plan multiple steps ahead in your output.
+10. DO NOT reference files, functions, or variables that you have not read with a tool in this conversation.
 --------------------------------------
 """

@@ -8,8 +8,13 @@ It features a web-based Control Center to manage configurations, download models
 
 ## Key Features
 * **Multi-Model Bridge**: Route requests dynamically:
-  1. **Bridge Head Model** (Reasoning Lead, e.g. gemma:4b) parses instructions and generates a plan.
-  2. **Coding Executor** (e.g. qwen:3.5b) or **Tooling Executor** consumes the plan and runs tasks.
+  1. **Bridge Head Model** (Reasoning Lead, e.g. qwen3.5:latest) parses instructions and generates a plan.
+  2. **Coding Executor** (e.g. qwen3.5:latest) or **Tooling Executor** consumes the plan and runs tasks.
+* **Optimized Prompt Compression**: Automatically extracts actionable parameters (OS, shell, working directory, git state) and discards bloated system prompts to fit local model context.
+* **Extended OS Detection**: Automatically detects win32, darwin (macOS), and linux platform environments.
+* **Strict Execution Constraints**: Injects 10 strict guardrails to prevent local models from simulating tool execution, inventing outputs, or writing mock logs.
+* **Shorter Tool Representations**: Compacts parameter typings and descriptions to fit local model context windows.
+* **Reasoning Fallback**: Automatically injects fallback execution plans if the reasoning model query fails.
 * **100% Local & Private**: No external API keys or cloud dependencies.
 * **Web Control Center**: Interactive dashboard served at http://localhost:8082/web (and /admin) to select models and modify prompts.
 * **Integrated Model Downloader**: Download any model directly from the Ollama registry via the web dashboard.
@@ -72,21 +77,21 @@ To run the server-side pipeline, you need reasoning and coding models pulled in 
 
 You can download them in two ways:
 1. **Via the Web Control Center**:
-   * Go to the **Ollama Model Downloader** card at the bottom of the dashboard.
-   * Input the model name (e.g. gemma:4b or qwen:3.5b) and click **Pull Model**.
-2. **Via Command Line**:
-   * Open your terminal and run:
-     ```bash
-     ollama pull gemma:4b
-     ollama pull qwen:3.5b
-     ```
+    * Go to the **Ollama Model Downloader** card at the bottom of the dashboard.
+    * Input the model name (e.g. qwen3.5:latest or llama3.2:latest) and click **Pull Model**.
+ 2. **Via Command Line**:
+    * Open your terminal and run:
+      ```bash
+      ollama pull qwen3.5:latest
+      ollama pull llama3.2:latest
+      ```
 
 ### Recommended Model Pairs
 * **Standard (8GB - 12GB VRAM)**:
-  * Reasoning Lead: gemma:4b or deepseek-r1:8b
-  * Coding Executor: qwen:3.5b
+  * Reasoning Lead: qwen3.5:latest (9b)
+  * Coding/Tooling Executor: qwen3.5:latest (9b)
 * **Resource Constrained (<8GB VRAM)**:
-  * Reasoning Lead: llama3.2:3b
+  * Reasoning Lead: llama3.2:latest (3b)
   * Coding Executor: qwen2.5-coder:3b
 
 ---

@@ -680,3 +680,15 @@ def test_convert_assistant_server_tool_blocks_raise(content) -> None:
     messages = [MockMessage("assistant", content)]
     with pytest.raises(OpenAIConversionError, match="server tool"):
         AnthropicToOpenAIConverter.convert_messages(messages)
+
+
+def test_convert_messages_with_dicts():
+    """Test that AnthropicToOpenAIConverter.convert_messages correctly processes raw dictionaries."""
+    dict_msgs = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi there"}]},
+    ]
+    result = AnthropicToOpenAIConverter.convert_messages(dict_msgs)
+    assert len(result) == 2
+    assert result[0] == {"role": "user", "content": "Hello"}
+    assert result[1] == {"role": "assistant", "content": "Hi there"}

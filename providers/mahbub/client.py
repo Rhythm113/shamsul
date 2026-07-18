@@ -1,7 +1,7 @@
 import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -13,6 +13,10 @@ from providers.base import (
     DEFAULT_INSTRUCTIONS,
     BaseProvider,
     ProviderConfig,
+)
+from providers.ollama.client import (
+    compress_message_history,
+    format_anthropic_messages_as_text,
 )
 
 
@@ -175,11 +179,27 @@ class MahbubProvider(BaseProvider):
         if not head_model_id:
             head_prov_id, head_model_id = "ollama", head_ref
 
-        # 2. Build the head reasoning request
+        # 2. Build the head reasoning request with compressed message history.
+        # Head model gets more context (context_head_recent_turns) so it understands
+        # what has already been done in large multi-file tasks.
         head_req = request.model_copy(deep=True)
         head_req.model = head_model_id
         instructions = self._get_instructions()
         head_req.system = append_system_prompt(head_req.system, f"\n\n{instructions}")
+
+        # Compress history: flatten structured blocks, then apply window compression
+        flattened_for_head = format_anthropic_messages_as_text(
+            [m if isinstance(m, dict) else m.__dict__ for m in head_req.messages]
+        )
+        head_req.messages = cast(
+            Any,
+            compress_message_history(
+                flattened_for_head,
+                recent_turn_count=self._settings.context_head_recent_turns,
+                max_result_chars=self._settings.context_max_result_chars,
+                max_write_content_lines=self._settings.context_max_write_lines,
+            ),
+        )
 
         head_provider = self._provider_resolver(head_prov_id)
         head_stream = head_provider.stream_response(
@@ -204,34 +224,43 @@ class MahbubProvider(BaseProvider):
         delegate_decision = ""
         guidance_text = ""
 
-        async for sse_event_str in head_stream:
-            parsed = parse_sse_line(sse_event_str)
-            if parsed is None:
-                continue
-            event_type, payload = parsed
+        try:
+            async for sse_event_str in head_stream:
+                parsed = parse_sse_line(sse_event_str)
+                if parsed is None:
+                    continue
+                event_type, payload = parsed
 
-            if event_type == "content_block_delta":
-                delta = payload.get("delta", {})
-                delta_type = delta.get("type")
+                if event_type == "content_block_delta":
+                    delta = payload.get("delta", {})
+                    delta_type = delta.get("type")
 
-                if delta_type == "thinking_delta":
-                    thinking_content = delta.get("thinking", "")
-                    yield ledger.emit_thinking_delta(thinking_content)
+                    if delta_type == "thinking_delta":
+                        thinking_content = delta.get("thinking", "")
+                        yield ledger.emit_thinking_delta(thinking_content)
 
-                elif delta_type == "text_delta":
-                    text_content = delta.get("text", "")
-                    think_chunk, del_chunk, other_chunk = tag_parser.feed(text_content)
+                    elif delta_type == "text_delta":
+                        text_content = delta.get("text", "")
+                        think_chunk, del_chunk, other_chunk = tag_parser.feed(
+                            text_content
+                        )
 
-                    if think_chunk:
-                        yield ledger.emit_thinking_delta(think_chunk)
-                    if del_chunk:
-                        delegate_decision += del_chunk
-                    if other_chunk:
-                        guidance_text += other_chunk
+                        if think_chunk:
+                            yield ledger.emit_thinking_delta(think_chunk)
+                        if del_chunk:
+                            delegate_decision += del_chunk
+                        if other_chunk:
+                            guidance_text += other_chunk
 
-            elif event_type == "error":
-                # Forward errors immediately
-                yield sse_event_str
+                elif event_type == "error":
+                    # Forward errors immediately
+                    yield sse_event_str
+
+        except Exception as exc:
+            logger.error("Mahbub head stream failed: {}", exc)
+            yield ledger.emit_thinking_delta(
+                f"\n[Head model error: {exc}. Using default delegation.]\n"
+            )
 
         # Stop thinking block
         yield ledger.stop_thinking_block()
@@ -256,9 +285,25 @@ class MahbubProvider(BaseProvider):
             target_model_id,
         )
 
-        # 5. Build and execute target request
+        # 5. Build and execute target request with compressed message history.
+        # Specialist model gets tighter compression (context_recent_turns) since it
+        # only needs to execute the plan, not analyse the full history.
         target_req = request.model_copy(deep=True)
         target_req.model = target_model_id
+
+        # Compress history: flatten structured blocks, then apply window compression
+        flattened_for_target = format_anthropic_messages_as_text(
+            [m if isinstance(m, dict) else m.__dict__ for m in target_req.messages]
+        )
+        target_req.messages = cast(
+            Any,
+            compress_message_history(
+                flattened_for_target,
+                recent_turn_count=self._settings.context_recent_turns,
+                max_result_chars=self._settings.context_max_result_chars,
+                max_write_content_lines=self._settings.context_max_write_lines,
+            ),
+        )
 
         # Prepend guidance text and bridge delegation marker
         guidance_content = (
@@ -281,39 +326,83 @@ class MahbubProvider(BaseProvider):
             thinking_enabled=thinking_enabled,
         )
 
-        # 6. Stream target response to client, re-indexing block indexes from 0 to 1
-        async for sse_event_str in target_stream:
-            parsed = parse_sse_line(sse_event_str)
-            if parsed is None:
-                continue
-            event_type, payload = parsed
+        # 6. Stream target response to client, re-indexing block indexes from 0 to 1.
+        #    Handle message_delta/message_stop through the ledger so its internal
+        #    state stays consistent; add error recovery and SSE finalization so the
+        #    Claude Code client never receives an incomplete stream.
+        target_message_delta_received = False
+        target_message_stop_received = False
 
-            # Skip message_start because we already yielded it
-            if event_type == "message_start":
-                continue
+        try:
+            async for sse_event_str in target_stream:
+                parsed = parse_sse_line(sse_event_str)
+                if parsed is None:
+                    continue
+                event_type, payload = parsed
 
-            elif event_type == "content_block_start":
-                idx = payload.get("index", 0) + 1
-                block = payload.get("content_block", {})
-                block_type = block.get("type", "text")
-                yield ledger.content_block_start(idx, block_type, **block)
+                # Skip message_start because we already yielded it
+                if event_type == "message_start":
+                    continue
 
-            elif event_type == "content_block_delta":
-                idx = payload.get("index", 0) + 1
-                delta = payload.get("delta", {})
-                delta_type = delta.get("type", "text_delta")
-                content = (
-                    delta.get("text")
-                    or delta.get("partial_json")
-                    or delta.get("thinking")
-                    or ""
+                elif event_type == "content_block_start":
+                    idx = payload.get("index", 0) + 1
+                    block = payload.get("content_block", {})
+                    block_type = block.get("type", "text")
+                    yield ledger.content_block_start(idx, block_type, **block)
+
+                elif event_type == "content_block_delta":
+                    idx = payload.get("index", 0) + 1
+                    delta = payload.get("delta", {})
+                    delta_type = delta.get("type", "text_delta")
+                    content = (
+                        delta.get("text")
+                        or delta.get("partial_json")
+                        or delta.get("thinking")
+                        or ""
+                    )
+                    yield ledger.content_block_delta(idx, delta_type, content)
+
+                elif event_type == "content_block_stop":
+                    idx = payload.get("index", 0) + 1
+                    yield ledger.content_block_stop(idx)
+
+                elif event_type == "message_delta":
+                    target_message_delta_received = True
+                    stop_reason = payload.get("delta", {}).get(
+                        "stop_reason", "end_turn"
+                    )
+                    usage = payload.get("usage", {})
+                    output_tokens = (
+                        usage.get("output_tokens", 0) if isinstance(usage, dict) else 0
+                    )
+                    yield ledger.message_delta(stop_reason, output_tokens)
+
+                elif event_type == "message_stop":
+                    target_message_stop_received = True
+                    yield ledger.message_stop()
+
+                else:
+                    # error, ping, keep-alive, etc.
+                    yield sse_event_str
+
+        except Exception as exc:
+            logger.error("Mahbub target stream failed: {}", exc)
+            # Close any open content blocks so the stream isn't left dangling
+            for event in ledger.close_all_blocks():
+                yield event
+            yield ledger.emit_top_level_error(str(exc))
+            yield ledger.message_delta("end_turn", 0)
+            yield ledger.message_stop()
+            return
+
+        # Target stream ended without proper finalization — emit it ourselves
+        # so the Claude Code client never sees an incomplete SSE stream.
+        if not target_message_stop_received:
+            for event in ledger.close_all_blocks():
+                yield event
+            if not target_message_delta_received:
+                yield ledger.message_delta(
+                    ledger.final_stop_reason("end_turn"),
+                    ledger.estimate_output_tokens(),
                 )
-                yield ledger.content_block_delta(idx, delta_type, content)
-
-            elif event_type == "content_block_stop":
-                idx = payload.get("index", 0) + 1
-                yield ledger.content_block_stop(idx)
-
-            else:
-                # message_delta, message_stop, error, etc.
-                yield sse_event_str
+            yield ledger.message_stop()

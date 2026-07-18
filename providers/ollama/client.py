@@ -119,6 +119,237 @@ def format_anthropic_messages_as_text(messages: list) -> list:
     return new_messages
 
 
+_WRITE_TOOL_NAMES = frozenset(
+    {
+        "Write",
+        "write_to_file",
+        "Edit",
+        "replace_file_content",
+        "multi_replace_file_content",
+    }
+)
+
+
+def _truncate_text(text: str, max_chars: int, label: str = "result") -> str:
+    """Truncate text to max_chars, appending a summary suffix when trimmed."""
+    if len(text) <= max_chars:
+        return text
+    return (
+        text[:max_chars]
+        + f"... [truncated {label}: was {len(text)} chars, kept {max_chars}]"
+    )
+
+
+def _compress_tool_result_content(content: str, max_chars: int) -> str:
+    """Compress tool result content to fit within max_chars."""
+    return _truncate_text(content, max_chars, "tool result")
+
+
+def _compress_write_content_in_tool_text(tool_text: str, max_lines: int) -> str:
+    """Shorten the code payload inside a historic Write/Edit tool text block.
+
+    The text block produced by format_anthropic_messages_as_text looks like:
+        ● <function=Write>
+        <parameter=TargetFile>path</parameter>
+        <parameter=CodeContent>...large code...</parameter>
+
+    We keep max_lines lines of the code and append a summary.
+    """
+    import re
+
+    # Match the parameter that holds bulk code content
+    code_param_names = r"(?:CodeContent|code|content|ReplacementContent)"
+    pattern = re.compile(
+        r"(<parameter=" + code_param_names + r">)([\s\S]*?)(</parameter>)",
+        re.IGNORECASE,
+    )
+
+    def _shorten(m: re.Match[str]) -> str:
+        open_tag, code, close_tag = m.group(1), m.group(2), m.group(3)
+        lines = code.splitlines()
+        if len(lines) <= max_lines:
+            return m.group(0)
+        kept = "\n".join(lines[:max_lines])
+        return (
+            f"{open_tag}{kept}\n"
+            f"... [compressed: {len(lines) - max_lines} more lines hidden]{close_tag}"
+        )
+
+    return pattern.sub(_shorten, tool_text)
+
+
+def compress_message_history(
+    messages: list,
+    recent_turn_count: int = 3,
+    max_result_chars: int = 3000,
+    max_write_content_lines: int = 10,
+) -> list:
+    """Compress message history to reduce token count for local model context windows.
+
+    Applies three rules in order:
+      R1 - Tool results older than ``recent_turn_count`` assistant turns are replaced
+           with a 1-line summary (first 200 chars + char count).
+      R2 - Tool results within the recent window but longer than ``max_result_chars``
+           are capped at that limit.
+      R3 - Write/Edit ``tool_use`` blocks in history have their code parameter
+           truncated to ``max_write_content_lines`` lines.
+
+    The function is designed to work on the *text-flattened* message list produced
+    by ``format_anthropic_messages_as_text`` (where every block is a ``{type, text}``
+    dict), but also handles raw Anthropic-style dicts with ``tool_result`` blocks.
+
+    Args:
+        messages: List of message dicts/objects (role/content pairs).
+        recent_turn_count: Number of recent assistant turns to keep at full fidelity.
+        max_result_chars: Maximum characters for any single tool result.
+        max_write_content_lines: Max lines kept in Write/Edit content params in history.
+
+    Returns:
+        A new list of message dicts/objects with compressed content.
+    """
+    from copy import deepcopy
+
+    if not messages:
+        return messages
+
+    def get_role(m: Any) -> str:
+        if isinstance(m, dict):
+            return m.get("role") or ""
+        return getattr(m, "role", "") or ""
+
+    def get_content(m: Any) -> Any:
+        if isinstance(m, dict):
+            return m.get("content")
+        return getattr(m, "content", None)
+
+    # Identify the last N assistant-turn indices (these mark the recent window boundary)
+    assistant_indices = [
+        i for i, m in enumerate(messages) if get_role(m) == "assistant"
+    ]
+    # The cutoff: messages at or after this index are in the recent window
+    if recent_turn_count <= 0:
+        recent_start_idx = len(messages)
+    elif len(assistant_indices) >= recent_turn_count:
+        recent_start_idx = assistant_indices[-recent_turn_count]
+    else:
+        recent_start_idx = 0
+
+    compressed: list = []
+    for msg_idx, msg in enumerate(messages):
+        msg = deepcopy(msg)
+        in_recent = msg_idx >= recent_start_idx
+        is_dict = isinstance(msg, dict)
+        role = get_role(msg)
+        content = get_content(msg)
+
+        if isinstance(content, list):
+            new_parts: list = []
+            for block in content:
+                block_type = block.get("type") if isinstance(block, dict) else None
+
+                # R1/R2: Compress tool_result content blocks
+                if block_type == "tool_result":
+                    inner = block.get("content", "")
+                    if isinstance(inner, list):
+                        # Flatten nested text blocks
+                        inner = "\n".join(
+                            b.get("text", str(b)) if isinstance(b, dict) else str(b)
+                            for b in inner
+                        )
+                    if not in_recent:
+                        # R1: Old result — keep only first 200 chars as summary
+                        summary = inner[:200].replace("\n", " ") if inner else ""
+                        block = dict(block)
+                        block["content"] = (
+                            f"[Compressed result: {summary}"
+                            f"... (was {len(inner)} chars, {inner.count(chr(10)) + 1} lines)]"
+                        )
+                    else:
+                        # R2: Recent but too long — cap at max_result_chars
+                        block = dict(block)
+                        block["content"] = _compress_tool_result_content(
+                            inner, max_result_chars
+                        )
+                    new_parts.append(block)
+                    continue
+
+                # R3: Compress Write/Edit tool_use code parameters in history
+                if block_type == "tool_use" and not in_recent:
+                    tool_name = block.get("name", "")
+                    if tool_name in _WRITE_TOOL_NAMES:
+                        inp = block.get("input", {})
+                        if isinstance(inp, dict):
+                            block = dict(block)
+                            new_inp = dict(inp)
+                            for key in (
+                                "code",
+                                "CodeContent",
+                                "content",
+                                "ReplacementContent",
+                            ):
+                                if key in new_inp and isinstance(new_inp[key], str):
+                                    lines = new_inp[key].splitlines()
+                                    if len(lines) > max_write_content_lines:
+                                        kept = "\n".join(
+                                            lines[:max_write_content_lines]
+                                        )
+                                        new_inp[key] = (
+                                            f"{kept}\n"
+                                            f"... [compressed: {len(lines) - max_write_content_lines}"
+                                            f" more lines hidden]"
+                                        )
+                            block["input"] = new_inp
+
+                # R3 for text-flattened tool blocks (after format_anthropic_messages_as_text)
+                if block_type == "text":
+                    text = block.get("text", "")
+                    # Detect tool_result text blocks: "[Tool Result: ...]"
+                    if text.startswith("[Tool Result:"):
+                        if not in_recent:
+                            # R1: Old result — heavily compress
+                            summary = text[:220].replace("\n", " ")
+                            text = (
+                                f"[Compressed result: {summary}"
+                                f"... (was {len(text)} chars)]"
+                            )
+                        else:
+                            # R2: Recent but too long — cap
+                            text = _truncate_text(text, max_result_chars, "tool result")
+                        block = {"type": "text", "text": text}
+                    # Detect tool_use text blocks containing Write/Edit tool calls
+                    elif (
+                        role == "assistant"
+                        and not in_recent
+                        and any(f"<function={n}>" in text for n in _WRITE_TOOL_NAMES)
+                    ):
+                        text = _compress_write_content_in_tool_text(
+                            text, max_write_content_lines
+                        )
+                        block = {"type": "text", "text": text}
+
+                new_parts.append(block)
+
+            if is_dict:
+                msg["content"] = new_parts
+            else:
+                msg.content = new_parts
+
+        elif isinstance(content, str) and not in_recent and role == "user":
+            # Plain-string tool results can appear in some formats
+            if content.startswith("[Tool Result:"):
+                summary = content[:200].replace("\n", " ")
+                new_val = (
+                    f"[Compressed result: {summary}... (was {len(content)} chars)]"
+                )
+                if is_dict:
+                    msg["content"] = new_val
+                else:
+                    msg.content = new_val
+
+        compressed.append(msg)
+    return compressed
+
+
 def extract_working_directory(system_prompt: Any, messages: list) -> str | None:
     import re
 
@@ -140,14 +371,18 @@ def extract_working_directory(system_prompt: Any, messages: list) -> str | None:
     if messages:
         first_msg = messages[0]
         content_str = ""
-        if isinstance(first_msg.content, str):
-            content_str = first_msg.content
-        elif isinstance(first_msg.content, list):
+        is_dict = isinstance(first_msg, dict)
+        content = (
+            first_msg.get("content") if is_dict else getattr(first_msg, "content", None)
+        )
+        if isinstance(content, str):
+            content_str = content
+        elif isinstance(content, list):
             content_str = "\n".join(
                 part.get("text", "")
                 if isinstance(part, dict)
                 else getattr(part, "text", "")
-                for part in first_msg.content
+                for part in content
             )
         text_to_search += "\n" + content_str
 
@@ -165,6 +400,11 @@ def extract_working_directory(system_prompt: Any, messages: list) -> str | None:
 
 
 def compress_system_prompt(system_prompt: Any) -> str:
+    """Build a minimal system prompt for small local models.
+
+    Strips Claude's identity, verbose instructions, and other content that
+    overwhelms local models. Keeps only actionable context: OS, shell, directory.
+    """
     if not system_prompt:
         return ""
 
@@ -182,20 +422,36 @@ def compress_system_prompt(system_prompt: Any) -> str:
                 parts.append(getattr(block, "text", ""))
         system_str = "\n".join(parts)
 
-    # Split into paragraphs to extract context (identity, OS, shell)
-    paragraphs = system_str.split("\n\n")
-    short_parts = []
-    # Keep the first 3 paragraphs (this usually contains the agent's identity, OS, and shell info)
-    for p in paragraphs[:3]:
-        p_stripped = p.strip()
-        if p_stripped:
-            short_parts.append(p_stripped)
+    import re
 
-    # If it is empty for some reason, fallback to first 1000 characters
-    if not short_parts:
-        return system_str[:1000]
+    # Extract only actionable facts from the massive Claude system prompt.
+    extracted: list[str] = [
+        "You are a helpful coding assistant. Follow tool calling instructions precisely."
+    ]
 
-    return "\n\n".join(short_parts)
+    # Pull platform info
+    platform_match = re.search(r"Platform:\s*(\S+)", system_str, re.IGNORECASE)
+    if platform_match:
+        extracted.append(f"Platform: {platform_match.group(1)}")
+
+    # Pull shell info
+    shell_match = re.search(r"Shell:\s*([^\n]+)", system_str, re.IGNORECASE)
+    if shell_match:
+        extracted.append(f"Shell: {shell_match.group(1).strip()}")
+
+    # Pull working directory
+    dir_match = re.search(
+        r"(?:working|primary)\s+directory:\s*([^\n]+)", system_str, re.IGNORECASE
+    )
+    if dir_match:
+        extracted.append(f"Working Directory: {dir_match.group(1).strip()}")
+
+    # Pull git repo info
+    git_match = re.search(r"Is a git repository:\s*(\S+)", system_str, re.IGNORECASE)
+    if git_match:
+        extracted.append(f"Git repository: {git_match.group(1)}")
+
+    return "\n".join(extracted)
 
 
 def detect_os_platform(system_prompt: Any) -> str:
@@ -216,8 +472,15 @@ def detect_os_platform(system_prompt: Any) -> str:
                 parts.append(getattr(block, "text", ""))
         system_str = "\n".join(parts)
 
-    if "win32" in system_str.lower() or "windows" in system_str.lower():
+    system_str_lower = system_str.lower()
+    if "win32" in system_str_lower or "windows" in system_str_lower:
         return "windows"
+    if (
+        "darwin" in system_str_lower
+        or "macos" in system_str_lower
+        or "osx" in system_str_lower
+    ):
+        return "darwin"
     return "linux"
 
 
@@ -270,16 +533,22 @@ def _format_tools_as_text(tools: list[dict], platform: str = "linux") -> str:
         name = func.get("name", "")
         desc = func.get("description", "")
         # truncate description to keep token usage small
-        if desc and len(desc) > 80:
-            desc = desc[:80] + "..."
+        if desc and len(desc) > 50:
+            desc = desc[:50] + "..."
         params = func.get("parameters", {}).get("properties", {})
         req_params = func.get("parameters", {}).get("required", [])
 
         param_list = []
         for p_name, p_info in params.items():
             is_req = "*" if p_name in req_params else ""
-            p_type = p_info.get("type", "string")
-            param_list.append(f"{p_name}{is_req} ({p_type})")
+            p_type = p_info.get("type", "str")
+            if p_type == "string":
+                p_type = "str"
+            elif p_type == "integer":
+                p_type = "int"
+            elif p_type == "boolean":
+                p_type = "bool"
+            param_list.append(f"{p_name}{is_req}:{p_type}")
 
         param_str = ", ".join(param_list)
         lines.append(f"- {name}({param_str}): {desc}")
@@ -333,6 +602,16 @@ class OllamaProvider(OpenAIChatTransport):
         except Exception as e:
             logger.warning("Failed to unload model '{}': {}", model_name, e)
 
+    def _prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Override to pass options like num_ctx to Ollama."""
+        body = super()._prepare_create_body(body)
+        if "extra_body" not in body:
+            body["extra_body"] = {}
+        if "options" not in body["extra_body"]:
+            body["extra_body"]["options"] = {}
+        body["extra_body"]["options"]["num_ctx"] = 32768
+        return body
+
     def _build_request_body(
         self, request: Any, thinking_enabled: bool | None = None
     ) -> dict:
@@ -348,7 +627,26 @@ class OllamaProvider(OpenAIChatTransport):
                 from copy import deepcopy
 
                 request_copy = deepcopy(request)
-            request_copy.messages = format_anthropic_messages_as_text(request.messages)
+            # Flatten structured Anthropic blocks to plain text for local models
+            flattened = format_anthropic_messages_as_text(request.messages)
+            # R1/R2/R3: Compress history to reduce context window pressure
+            request_copy.messages = compress_message_history(
+                flattened,
+                recent_turn_count=self._settings.context_recent_turns,
+                max_result_chars=self._settings.context_max_result_chars,
+                max_write_content_lines=self._settings.context_max_write_lines,
+            )
+            # Compress the bloated Claude system prompt before conversion.
+            # Without this, the full ~8000-token Claude identity prompt is
+            # passed verbatim to the 7B model, causing hallucinations.
+            original_system = getattr(request_copy, "system", "") or ""
+            compressed = compress_system_prompt(original_system)
+            platform = detect_os_platform(original_system)
+            request_copy.system = (
+                f"{compressed}\n"
+                f"Operating System Platform: {platform.upper()}\n"
+                f"{CRITICAL_EXECUTION_CONSTRAINTS}"
+            )
             body = build_base_request_body(
                 request_copy,
                 reasoning_replay=ReasoningReplayMode.DISABLED,
@@ -358,8 +656,6 @@ class OllamaProvider(OpenAIChatTransport):
             body.pop("tool_choice", None)
 
             if tools:
-                original_system = getattr(request, "system", "") or ""
-                platform = detect_os_platform(original_system)
                 tool_text = _format_tools_as_text(tools, platform=platform)
                 messages = body.get("messages", [])
 
@@ -451,6 +747,17 @@ class OllamaProvider(OpenAIChatTransport):
 
         platform_info = f"\nOperating System Platform: {platform.upper()}"
 
+        # Build text-flattened + compressed history for the reasoning model.
+        # The head reasoning model gets a slightly larger window (context_head_recent_turns)
+        # so it has more prior-action context when analysing large codebases.
+        raw_flattened = format_anthropic_messages_as_text(messages)
+        compressed_for_reasoning = compress_message_history(
+            raw_flattened,
+            recent_turn_count=self._settings.context_head_recent_turns,
+            max_result_chars=self._settings.context_max_result_chars,
+            max_write_content_lines=self._settings.context_max_write_lines,
+        )
+
         reasoning_messages: list[ChatCompletionMessageParam] = [
             {
                 "role": "system",
@@ -460,49 +767,33 @@ class OllamaProvider(OpenAIChatTransport):
                 + tools_summary,
             }
         ]
-        for msg in messages:
-            content = ""
-            if isinstance(msg.content, str):
-                content = msg.content
-            elif isinstance(msg.content, list):
+        for compressed_msg in compressed_for_reasoning:
+            is_dict = isinstance(compressed_msg, dict)
+            role = (
+                compressed_msg.get("role", "user")
+                if is_dict
+                else getattr(compressed_msg, "role", "user")
+            )
+            msg_content = (
+                compressed_msg.get("content", "")
+                if is_dict
+                else getattr(compressed_msg, "content", "")
+            )
+            if isinstance(msg_content, list):
                 parts = []
-                for part in msg.content:
-                    p_type = (
-                        part.get("type")
-                        if isinstance(part, dict)
-                        else getattr(part, "type", None)
-                    )
+                for part in msg_content:
+                    p_type = part.get("type") if isinstance(part, dict) else None
                     if p_type == "text":
-                        text = (
-                            part.get("text", "")
-                            if isinstance(part, dict)
-                            else getattr(part, "text", "")
-                        )
-                        parts.append(text)
-                    elif p_type == "tool_use":
-                        name = (
-                            part.get("name")
-                            if isinstance(part, dict)
-                            else getattr(part, "name", "")
-                        )
-                        inp = (
-                            part.get("input")
-                            if isinstance(part, dict)
-                            else getattr(part, "input", "")
-                        )
-                        parts.append(f"[Tool Use: {name} input: {inp}]")
-                    elif p_type == "tool_result":
-                        content_val = (
-                            part.get("content")
-                            if isinstance(part, dict)
-                            else getattr(part, "content", "")
-                        )
-                        parts.append(f"[Tool Result: {content_val}]")
+                        parts.append(part.get("text", ""))
                     else:
                         parts.append(str(part))
                 content = "\n".join(parts)
+            elif isinstance(msg_content, str):
+                content = msg_content
+            else:
+                content = str(msg_content)
             reasoning_messages.append(
-                cast(ChatCompletionMessageParam, {"role": msg.role, "content": content})
+                cast(ChatCompletionMessageParam, {"role": role, "content": content})
             )
 
         # 3. Stream the Reasoning Model's response as a thinking block
@@ -517,6 +808,7 @@ class OllamaProvider(OpenAIChatTransport):
                 model=self._settings.ollama_reasoning_model,
                 messages=reasoning_messages,
                 stream=True,
+                extra_body={"options": {"num_ctx": 32768}},
             )
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
@@ -525,8 +817,13 @@ class OllamaProvider(OpenAIChatTransport):
                     yield ledger.emit_thinking_delta(delta)
         except Exception as e:
             logger.error("Reasoning model query failed: {}", e)
+            reasoning_plan = (
+                "Reasoning model unavailable. Execute the user's most recent request "
+                "directly. Use ONE tool at a time. Read files before editing them. "
+                "Do not guess file contents."
+            )
             yield ledger.emit_thinking_delta(
-                f"\n[Reasoning model error: {e}. Defaulting to direct coding execution.]\n"
+                f"\n[Reasoning model error: {e}. Using fallback plan.]\n"
             )
 
         yield ledger.stop_thinking_block()

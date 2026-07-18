@@ -158,10 +158,13 @@ class AnthropicToOpenAIConverter:
         pending: _PendingAfterTools | None = None
 
         for msg in messages:
-            role = msg.role
-            content = msg.content
+            is_dict = isinstance(msg, dict)
+            role = msg.get("role", "") if is_dict else getattr(msg, "role", "")
+            content = msg.get("content") if is_dict else getattr(msg, "content", None)
             reasoning_content = _clean_reasoning_content(
-                getattr(msg, "reasoning_content", None)
+                msg.get("reasoning_content")
+                if is_dict
+                else getattr(msg, "reasoning_content", None)
             )
 
             if role == "assistant" and isinstance(content, list):

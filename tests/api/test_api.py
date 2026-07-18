@@ -269,3 +269,47 @@ def test_stop_endpoint_no_workflow_no_cli_503(client: TestClient):
         delattr(app.state, "cli_manager")
     response = client.post("/stop")
     assert response.status_code == 503
+
+
+def test_api_config(client: TestClient, tmp_path):
+    """GET and POST config endpoints fetch and update settings including context compression."""
+    temp_env = tmp_path / ".env"
+    temp_env.write_text("OLLAMA_REASONING_MODEL=gemma2:9b\n", encoding="utf-8")
+
+    with (
+        patch("config.paths.managed_env_path", return_value=temp_env),
+        patch("config.settings.clear_settings_cache"),
+    ):
+        # 1. Test GET config
+        resp_get = client.get("/api/config")
+        assert resp_get.status_code == 200
+        data_get = resp_get.json()
+        assert "context_recent_turns" in data_get
+        assert "context_max_result_chars" in data_get
+        assert "context_max_write_lines" in data_get
+        assert "context_head_recent_turns" in data_get
+
+        # 2. Test POST config updates
+        payload = {
+            "ollama_reasoning_model": "qwen2.5-coder:7b",
+            "ollama_coding_model": "qwen2.5-coder:7b",
+            "ollama_voice_model": "",
+            "ollama_image_model": "",
+            "ollama_reasoning_system_prompt": "Prompt text",
+            "bridge_head_model": "ollama/qwen:3.5b",
+            "bridge_coding_model": "ollama/qwen:3.5b",
+            "bridge_tooling_model": "ollama/gemma:4b",
+            "context_recent_turns": 4,
+            "context_max_result_chars": 5000,
+            "context_max_write_lines": 15,
+            "context_head_recent_turns": 8,
+        }
+        resp_post = client.post("/api/config", json=payload)
+        assert resp_post.status_code == 200
+
+        # Verify .env contents
+        env_content = temp_env.read_text(encoding="utf-8")
+        assert 'CONTEXT_RECENT_TURNS="4"' in env_content
+        assert 'CONTEXT_MAX_RESULT_CHARS="5000"' in env_content
+        assert 'CONTEXT_MAX_WRITE_LINES="15"' in env_content
+        assert 'CONTEXT_HEAD_RECENT_TURNS="8"' in env_content

@@ -57,7 +57,9 @@ def resolve_tool_name(name: str, allowed: set[str] | None) -> str | None:
     for alias_set in aliases.values():
         if name in alias_set:
             for allowed_name in allowed:
-                if allowed_name in alias_set:
+                # Strip namespace prefix if present (e.g., 'default_api:write_to_file' -> 'write_to_file')
+                unprefixed = allowed_name.partition(":")[-1] or allowed_name
+                if allowed_name in alias_set or unprefixed in alias_set:
                     return allowed_name
     return None
 

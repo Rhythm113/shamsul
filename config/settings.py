@@ -118,6 +118,30 @@ class Settings(BaseSettings):
         validation_alias="OLLAMA_REASONING_SYSTEM_PROMPT",
     )
 
+    # ==================== Context Compression ====================
+    # Number of recent assistant/user exchange turns to keep uncompressed.
+    # Tool results outside this window are truncated to a short summary.
+    # Increase for tasks that need deeper history; decrease for very large codebases.
+    context_recent_turns: int = Field(
+        default=2, validation_alias="CONTEXT_RECENT_TURNS"
+    )
+    # Maximum characters allowed for any single tool result within the recent window.
+    # Results exceeding this limit are capped even in the recent window.
+    # 3000 chars ≈ 750 tokens, enough to capture most file read outputs.
+    context_max_result_chars: int = Field(
+        default=1500, validation_alias="CONTEXT_MAX_RESULT_CHARS"
+    )
+    # Maximum lines of code to keep in Write/Edit tool_use blocks in history.
+    # Past write operations are summarised to avoid re-transmitting large files.
+    context_max_write_lines: int = Field(
+        default=5, validation_alias="CONTEXT_MAX_WRITE_LINES"
+    )
+    # Recent turns kept for the Head Reasoning model. Larger codebases benefit from
+    # giving the reasoning model more history (5-10) to understand what was already done.
+    context_head_recent_turns: int = Field(
+        default=5, validation_alias="CONTEXT_HEAD_RECENT_TURNS"
+    )
+
     # ==================== Model ====================
     # Fallback model reference
     model: str = "mahbub/hybrid"
