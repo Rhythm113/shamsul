@@ -19,6 +19,61 @@ class ParserState(Enum):
     PARSING_PARAMETERS = 3
 
 
+def resolve_tool_name(name: str, allowed: set[str] | None) -> str | None:
+    if not allowed:
+        return name
+    if name in allowed:
+        return name
+
+    aliases = {
+        "Write": {"write_to_file", "Write", "write_file"},
+        "write_to_file": {"Write", "write_to_file", "write_file"},
+        "Edit": {
+            "replace_file_content",
+            "Edit",
+            "edit_file",
+            "multi_replace_file_content",
+        },
+        "replace_file_content": {
+            "Edit",
+            "replace_file_content",
+            "edit_file",
+            "multi_replace_file_content",
+        },
+        "multi_replace_file_content": {
+            "Edit",
+            "replace_file_content",
+            "edit_file",
+            "multi_replace_file_content",
+        },
+        "Read": {"view_file", "Read", "read_file"},
+        "view_file": {"Read", "view_file", "read_file"},
+        "Glob": {"list_dir", "Glob", "list_files"},
+        "list_dir": {"Glob", "list_dir", "list_files"},
+        "Bash": {"run_command", "Bash", "execute_command"},
+        "run_command": {"Bash", "run_command", "execute_command"},
+    }
+
+    for alias_set in aliases.values():
+        if name in alias_set:
+            for allowed_name in allowed:
+                if allowed_name in alias_set:
+                    return allowed_name
+    return None
+
+
+def is_potential_tool_call_start(buf: str) -> bool:
+    stripped = buf.lstrip("●").lstrip()
+    if not stripped:
+        return True
+
+    target = "<function="
+    if target.startswith(stripped) or stripped.startswith(target):
+        return True
+
+    return bool(re.match(r"^\w+\(?$", stripped))
+
+
 class HeuristicToolParser:
     """
     Stateful parser for raw text tool calls.
@@ -39,12 +94,13 @@ class HeuristicToolParser:
         r"(</?(?:parameter|function|file_path|content|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cwd)(?:=[^>]*)?>|●\s*<function=[^>]*>)"
     )
 
-    def __init__(self):
+    def __init__(self, allowed_tool_names: set[str] | None = None):
         self._state = ParserState.TEXT
         self._buffer = ""
         self._current_tool_id = None
         self._current_function_name = None
         self._current_parameters = {}
+        self.allowed_tool_names = allowed_tool_names
 
     def _extract_web_tool_json_calls(self) -> tuple[str, list[dict[str, Any]]]:
         detected_tools: list[dict[str, Any]] = []
@@ -106,11 +162,20 @@ class HeuristicToolParser:
             try:
                 obj, end_offset = json.JSONDecoder().raw_decode(self._buffer, brace_idx)
                 if isinstance(obj, dict) and "name" in obj and "arguments" in obj:
+                    tool_name = obj["name"]
+                    resolved_name = resolve_tool_name(
+                        tool_name, self.allowed_tool_names
+                    )
+                    if self.allowed_tool_names and resolved_name is None:
+                        # Unregistered tool, do not parse as tool call
+                        pos = end_offset
+                        continue
+
                     detected_tools.append(
                         {
                             "type": "tool_use",
                             "id": f"toolu_heuristic_{uuid.uuid4().hex[:8]}",
-                            "name": obj["name"],
+                            "name": resolved_name or tool_name,
                             "input": obj.get("arguments", {}),
                         }
                     )
@@ -141,6 +206,16 @@ class HeuristicToolParser:
 
             start_idx = pos + match.start()
             tool_name = match.group(1)
+
+            resolved_name = resolve_tool_name(tool_name, self.allowed_tool_names)
+            if self.allowed_tool_names and resolved_name is None:
+                # Unregistered tool, do not parse as tool call
+                result_parts.append(self._buffer[pos : match.end()])
+                pos = match.end()
+                continue
+
+            if resolved_name:
+                tool_name = resolved_name
 
             # Find the matching closing parenthesis ')' taking quotes into account
             paren_start = pos + match.end() - 1
@@ -228,21 +303,49 @@ class HeuristicToolParser:
                 elif tool_name in {"run_command", "execute_command"}:
                     tool_input["command"] = val
 
-            detected_tools.append(
-                {
-                    "type": "tool_use",
-                    "id": f"toolu_heuristic_{uuid.uuid4().hex[:8]}",
-                    "name": tool_name,
-                    "input": tool_input,
+            # Validate required parameters for Write and Edit tools
+            is_valid = True
+            if (
+                tool_name in {"Write", "write_to_file"}
+                and not any(k in tool_input for k in {"code", "CodeContent", "content"})
+            ) or (
+                tool_name
+                in {
+                    "Edit",
+                    "replace_file_content",
+                    "multi_replace_file_content",
                 }
-            )
-            logger.debug(
-                "Heuristic bypass: Detected Python-style tool call '{}'",
-                tool_name,
-            )
+                and not any(
+                    k in tool_input
+                    for k in {
+                        "ReplacementContent",
+                        "replacement",
+                        "TargetContent",
+                        "target",
+                    }
+                )
+            ):
+                is_valid = False
 
-            result_parts.append(self._buffer[pos:start_idx])
-            pos = paren_end + 1
+            if is_valid:
+                detected_tools.append(
+                    {
+                        "type": "tool_use",
+                        "id": f"toolu_heuristic_{uuid.uuid4().hex[:8]}",
+                        "name": tool_name,
+                        "input": tool_input,
+                    }
+                )
+                logger.debug(
+                    "Heuristic bypass: Detected Python-style tool call '{}'",
+                    tool_name,
+                )
+                result_parts.append(self._buffer[pos:start_idx])
+                pos = paren_end + 1
+            else:
+                # Treat as plain text to avoid emitting invalid/empty tool calls
+                result_parts.append(self._buffer[pos : paren_end + 1])
+                pos = paren_end + 1
 
         if detected_tools:
             return "".join(result_parts).strip(), detected_tools
@@ -304,7 +407,18 @@ class HeuristicToolParser:
             if self._state == ParserState.MATCHING_FUNCTION:
                 match = self._FUNC_START_PATTERN.search(self._buffer)
                 if match:
-                    self._current_function_name = match.group(1).strip()
+                    func_name = match.group(1).strip()
+                    resolved_name = resolve_tool_name(
+                        func_name, self.allowed_tool_names
+                    )
+                    if self.allowed_tool_names and resolved_name is None:
+                        # Unregistered tool, treat as plain text/skip
+                        filtered_output_parts.append(self._buffer[0])
+                        self._buffer = self._buffer[1:]
+                        self._state = ParserState.TEXT
+                        continue
+
+                    self._current_function_name = resolved_name or func_name
                     self._current_tool_id = f"toolu_heuristic_{uuid.uuid4().hex[:8]}"
                     self._current_parameters = {}
                     self._buffer = self._buffer[match.end() :]
@@ -313,7 +427,10 @@ class HeuristicToolParser:
                         "Heuristic bypass: Detected start of tool call '{}'",
                         self._current_function_name,
                     )
-                elif len(self._buffer) > 100:
+                elif (
+                    not is_potential_tool_call_start(self._buffer)
+                    or len(self._buffer) > 100
+                ):
                     filtered_output_parts.append(self._buffer[0])
                     self._buffer = self._buffer[1:]
                     self._state = ParserState.TEXT

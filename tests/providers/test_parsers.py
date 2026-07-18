@@ -590,13 +590,49 @@ def test_heuristic_tool_parser_python_style_calls():
 
     # Test positional argument fallback
     parser = HeuristicToolParser()
-    text = '● Write("D:\\test\\index.html")'
+    text = '● view_file("D:\\test\\index.html")'
     filtered, tools = parser.feed(text)
     tools.extend(parser.flush())
 
     assert len(tools) == 1
-    assert tools[0]["name"] == "Write"
+    assert tools[0]["name"] == "view_file"
     assert tools[0]["input"] == {
         "file_path": "D:\\test\\index.html",
     }
     assert filtered.strip() == ""
+
+
+def test_heuristic_tool_parser_unregistered_tools():
+    """Test that HeuristicToolParser ignores unregistered/hallucinated tools."""
+    allowed = {"view_file", "write_to_file"}
+    parser = HeuristicToolParser(allowed_tool_names=allowed)
+
+    # 1. Unregistered Python-style call
+    text = '● mkdir("src")'
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 0
+    assert "● mkdir" in filtered
+
+    # 2. Registered Python-style call (with alias resolution)
+    parser = HeuristicToolParser(allowed_tool_names=allowed)
+    text = '● Write(file_path="index.html", code="my content")'
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "write_to_file"  # Resolved from Write to write_to_file
+    assert tools[0]["input"] == {
+        "file_path": "index.html",
+        "code": "my content",
+    }
+
+    # 3. Unregistered XML-style call
+    parser = HeuristicToolParser(allowed_tool_names=allowed)
+    text = "● <function=mkdir><parameter=path>src</parameter>"
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 0
+    assert "src" in filtered

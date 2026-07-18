@@ -94,8 +94,17 @@ class OpenAIChatStreamAdapter:
             body=provider_chat_body_snapshot(body),
         )
 
+        allowed_tools = set()
+        if hasattr(self._request, "tools") and self._request.tools:
+            for tool in self._request.tools:
+                t_name = getattr(tool, "name", None) or (
+                    tool.get("name") if isinstance(tool, dict) else None
+                )
+                if t_name:
+                    allowed_tools.add(t_name)
+
         think_parser = ThinkTagParser()
-        heuristic_parser = HeuristicToolParser()
+        heuristic_parser = HeuristicToolParser(allowed_tool_names=allowed_tools)
         finish_reason = None
         usage_info = None
         tool_argument_aliases: dict[str, dict[str, str]] = {}
@@ -229,7 +238,9 @@ class OpenAIChatStreamAdapter:
                     if decision.action == RecoveryFailureAction.EARLY_RETRY:
                         ledger = self._new_ledger()
                         think_parser = ThinkTagParser()
-                        heuristic_parser = HeuristicToolParser()
+                        heuristic_parser = HeuristicToolParser(
+                            allowed_tool_names=allowed_tools
+                        )
                         finish_reason = None
                         usage_info = None
                         tool_argument_aliases = {}
