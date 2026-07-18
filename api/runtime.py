@@ -191,8 +191,6 @@ class AppRuntime:
                     voice_note_enabled=self.settings.voice_note_enabled,
                     whisper_model=self.settings.whisper_model,
                     whisper_device=self.settings.whisper_device,
-                    huggingface_api_key=self.settings.huggingface_api_key,
-                    nvidia_nim_api_key=self.settings.nvidia_nim_api_key,
                     messaging_rate_limit=self.settings.messaging_rate_limit,
                     messaging_rate_window=self.settings.messaging_rate_window,
                     log_raw_messaging_content=self.settings.log_raw_messaging_content,
