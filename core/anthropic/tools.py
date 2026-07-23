@@ -85,15 +85,19 @@ class HeuristicToolParser:
     Anthropic-style ``tool_use`` blocks.
     """
 
-    _FUNC_START_PATTERN = re.compile(r"●\s*<function=([^>]+)>")
+    _FUNC_START_PATTERN = re.compile(
+        r"(?:●|[●•\-*]|\b)?\s*<function[:=]\s*([^>]+)>", re.IGNORECASE
+    )
     _PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>(.*?)(?:</parameter>|</\1>|$)", re.DOTALL
+        r"<(?:parameter|param)(?:=|\s+name=[\"']?)([^>\"']+)(?:[\"'])?>(.*?)(?:</(?:parameter|param)>|</\1>|$)",
+        re.IGNORECASE | re.DOTALL,
     )
     _WEB_TOOL_JSON_PATTERN = re.compile(
         r"(?is)\b(?:use\s+)?(?P<tool>WebFetch|WebSearch)\b.*?(?P<json>\{.*?\})"
     )
     _STRAY_TAGS_RE = re.compile(
-        r"(</?(?:parameter|function|file_path|content|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cwd)(?:=[^>]*)?>|●\s*<function=[^>]*>)"
+        r"(</?(?:parameter|param|function|file_path|content|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cwd)(?:=[^>]*)?>|●?\s*<function=[^>]*>)",
+        re.IGNORECASE,
     )
 
     def __init__(self, allowed_tool_names: set[str] | None = None):
@@ -391,8 +395,15 @@ class HeuristicToolParser:
 
         while True:
             if self._state == ParserState.TEXT:
+                idx = -1
                 if "●" in self._buffer:
                     idx = self._buffer.find("●")
+                elif "<function=" in self._buffer.lower():
+                    idx = self._buffer.lower().find("<function=")
+                elif "<function:" in self._buffer.lower():
+                    idx = self._buffer.lower().find("<function:")
+
+                if idx != -1:
                     filtered_output_parts.append(self._buffer[:idx])
                     self._buffer = self._buffer[idx:]
                     self._state = ParserState.MATCHING_FUNCTION
