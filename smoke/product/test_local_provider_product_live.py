@@ -7,24 +7,6 @@ from smoke.lib.local_providers import first_local_provider_model_id
 pytestmark = [pytest.mark.live]
 
 
-@pytest.mark.smoke_target("lmstudio")
-def test_lmstudio_native_messages_e2e(smoke_config: SmokeConfig) -> None:
-    _local_native_messages_e2e(
-        smoke_config,
-        provider="lmstudio",
-        base_url=smoke_config.settings.lm_studio_base_url,
-    )
-
-
-@pytest.mark.smoke_target("llamacpp")
-def test_llamacpp_native_messages_e2e(smoke_config: SmokeConfig) -> None:
-    _local_native_messages_e2e(
-        smoke_config,
-        provider="llamacpp",
-        base_url=smoke_config.settings.llamacpp_base_url,
-    )
-
-
 @pytest.mark.smoke_target("ollama")
 def test_ollama_native_messages_e2e(smoke_config: SmokeConfig) -> None:
     _local_native_messages_e2e(

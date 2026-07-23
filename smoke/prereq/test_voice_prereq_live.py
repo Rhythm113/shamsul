@@ -26,8 +26,6 @@ def test_voice_transcription_backend_when_explicitly_enabled(
             "whisper_model": smoke_config.settings.whisper_model,
             "whisper_device": smoke_config.settings.whisper_device,
         }
-        if smoke_config.settings.whisper_device == "nvidia_nim":
-            t_kw["nvidia_nim_api_key"] = smoke_config.settings.nvidia_nim_api_key
         text = transcribe_audio(wav_path, "audio/wav", **t_kw)
     except ImportError as exc:
         pytest.skip(str(exc))

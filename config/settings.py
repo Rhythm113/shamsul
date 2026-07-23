@@ -12,59 +12,10 @@ from .env_files import (
     env_file_override,
     settings_env_files,
 )
-from .nim import NimSettings
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-
-    # ==================== Legacy/Deprecated Provider Fields (for compatibility) ====================
-    open_router_api_key: str = ""
-    mistral_api_key: str = ""
-    codestral_api_key: str = ""
-    deepseek_api_key: str = ""
-    kimi_api_key: str = ""
-    wafer_api_key: str = ""
-    minimax_api_key: str = ""
-    opencode_api_key: str = ""
-    vercel_ai_gateway_api_key: str = ""
-    huggingface_api_key: str = ""
-    cohere_api_key: str = ""
-    github_models_token: str = ""
-    sambanova_api_key: str = ""
-    zai_api_key: str = ""
-    fireworks_api_key: str = ""
-    cloudflare_api_token: str = ""
-    cloudflare_account_id: str = ""
-    gemini_api_key: str = ""
-    groq_api_key: str = ""
-    cerebras_api_key: str = ""
-    nvidia_nim_api_key: str = ""
-    lm_studio_base_url: str = ""
-    llamacpp_base_url: str = ""
-    nvidia_nim_proxy: str = ""
-    open_router_proxy: str = ""
-    mistral_proxy: str = ""
-    codestral_proxy: str = ""
-    lmstudio_proxy: str = ""
-    llamacpp_proxy: str = ""
-    kimi_proxy: str = ""
-    wafer_proxy: str = ""
-    minimax_proxy: str = ""
-    opencode_proxy: str = ""
-    opencode_go_proxy: str = ""
-    vercel_ai_gateway_proxy: str = ""
-    huggingface_proxy: str = ""
-    cohere_proxy: str = ""
-    github_models_proxy: str = ""
-    sambanova_proxy: str = ""
-    zai_proxy: str = ""
-    fireworks_proxy: str = ""
-    cloudflare_proxy: str = ""
-    gemini_proxy: str = ""
-    groq_proxy: str = ""
-    cerebras_proxy: str = ""
-    nim: NimSettings = Field(default_factory=NimSettings)
 
     # ==================== Ollama Config ====================
     ollama_base_url: str = Field(
@@ -140,6 +91,24 @@ class Settings(BaseSettings):
     # giving the reasoning model more history (5-10) to understand what was already done.
     context_head_recent_turns: int = Field(
         default=5, validation_alias="CONTEXT_HEAD_RECENT_TURNS"
+    )
+    # Enable in-memory Session Context Store across turns
+    enable_context_store: bool = Field(
+        default=True, validation_alias="ENABLE_CONTEXT_STORE"
+    )
+    # Token budgets per role for <=8B models
+    context_max_tokens_head: int = Field(
+        default=8192, validation_alias="CONTEXT_MAX_TOKENS_HEAD"
+    )
+    context_max_tokens_coding: int = Field(
+        default=8192, validation_alias="CONTEXT_MAX_TOKENS_CODING"
+    )
+    context_max_tokens_tooling: int = Field(
+        default=4096, validation_alias="CONTEXT_MAX_TOKENS_TOOLING"
+    )
+    # Maximum active files cached in Session Context Store
+    context_store_max_files: int = Field(
+        default=20, validation_alias="CONTEXT_STORE_MAX_FILES"
     )
 
     # ==================== Model ====================
@@ -296,33 +265,7 @@ class Settings(BaseSettings):
                 "Format: provider_type/model/name"
             )
         provider = v.split("/", 1)[0]
-        allowed = {
-            "nvidia_nim",
-            "open_router",
-            "gemini",
-            "deepseek",
-            "mistral",
-            "mistral_codestral",
-            "opencode",
-            "opencode_go",
-            "vercel",
-            "huggingface",
-            "cohere",
-            "github_models",
-            "wafer",
-            "kimi",
-            "minimax",
-            "cerebras",
-            "groq",
-            "sambanova",
-            "fireworks",
-            "cloudflare",
-            "zai",
-            "lmstudio",
-            "llamacpp",
-            "ollama",
-            "mahbub",
-        }
+        allowed = {"ollama", "mahbub"}
         if provider not in allowed:
             supported = ", ".join(f"'{p}'" for p in sorted(allowed))
             raise ValueError(f"Invalid provider: '{provider}'. Supported: {supported}")

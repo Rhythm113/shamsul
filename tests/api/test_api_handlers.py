@@ -93,7 +93,7 @@ async def test_messages_handler_passes_routed_request_and_stream_metadata() -> N
     provider = FakeProvider()
     handler = MessagesHandler(Settings(), provider_getter=lambda _: provider)
     request = MessagesRequest(
-        model="nvidia_nim/test-model",
+        model="ollama/gemma2:9b",
         max_tokens=100,
         messages=[Message(role="user", content="hi")],
     )
@@ -103,7 +103,7 @@ async def test_messages_handler_passes_routed_request_and_stream_metadata() -> N
 
     body = await _streaming_body_text(response)
     assert "message_start" in body
-    assert provider.requests[0].model == "test-model"
+    assert provider.requests[0].model == "gemma2:9b"
     assert provider.stream_kwargs[0]["input_tokens"] > 0
     assert provider.stream_kwargs[0]["request_id"].startswith("req_")
     assert provider.stream_kwargs[0]["thinking_enabled"] is True
@@ -162,7 +162,7 @@ async def test_messages_handler_aggregates_provider_stream_when_stream_false() -
     )
     handler = MessagesHandler(Settings(), provider_getter=lambda _: provider)
     request = MessagesRequest(
-        model="nvidia_nim/test-model",
+        model="ollama/gemma2:9b",
         max_tokens=100,
         stream=False,
         messages=[Message(role="user", content="hi")],
@@ -197,7 +197,7 @@ async def test_messages_handler_returns_error_json_for_stream_false_sse_error() 
     )
     handler = MessagesHandler(Settings(), provider_getter=lambda _: provider)
     request = MessagesRequest(
-        model="nvidia_nim/test-model",
+        model="ollama/gemma2:9b",
         max_tokens=100,
         stream=False,
         messages=[Message(role="user", content="hi")],
@@ -219,7 +219,7 @@ async def test_messages_handler_forces_no_thinking_for_safety_classifier() -> No
     provider = FakeProvider()
     handler = MessagesHandler(Settings(), provider_getter=lambda _: provider)
     request = MessagesRequest(
-        model="nvidia_nim/test-model",
+        model="ollama/gemma2:9b",
         max_tokens=100,
         system=_CLASSIFIER_SYSTEM,
         messages=[Message(role="user", content=_CLASSIFIER_USER)],
@@ -232,7 +232,7 @@ async def test_messages_handler_forces_no_thinking_for_safety_classifier() -> No
 
     assert provider.preflight_calls[0][1] is False
     assert provider.stream_kwargs[0]["thinking_enabled"] is False
-    assert provider.requests[0].model == "test-model"
+    assert provider.requests[0].model == "gemma2:9b"
     assert provider.requests[0].system == _CLASSIFIER_SYSTEM
     assert _trace_events(
         trace_mock, "api.optimization.safety_classifier_no_thinking"
@@ -241,7 +241,7 @@ async def test_messages_handler_forces_no_thinking_for_safety_classifier() -> No
             "stage": "routing",
             "event": "api.optimization.safety_classifier_no_thinking",
             "source": "api",
-            "model": "test-model",
+            "model": "gemma2:9b",
             "changed": True,
         }
     ]
@@ -252,7 +252,7 @@ async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
     provider = FakeProvider()
     handler = MessagesHandler(Settings(), provider_getter=lambda _: provider)
     request = MessagesRequest(
-        model="nvidia_nim/test-model",
+        model="ollama/gemma2:9b",
         max_tokens=100,
         system="Explain XML formats.",
         messages=[
@@ -284,7 +284,7 @@ async def test_messages_handler_keeps_existing_no_thinking_for_classifier() -> N
     provider = FakeProvider()
     handler = MessagesHandler(Settings(), provider_getter=lambda _: provider)
     request = MessagesRequest(
-        model="claude-3-shamsul-no-thinking/nvidia_nim/test-model",
+        model="claude-3-shamsul-no-thinking/ollama/gemma2:9b",
         max_tokens=100,
         system=_CLASSIFIER_SYSTEM,
         messages=[Message(role="user", content=_CLASSIFIER_USER)],
@@ -304,7 +304,7 @@ async def test_messages_handler_keeps_existing_no_thinking_for_classifier() -> N
             "stage": "routing",
             "event": "api.optimization.safety_classifier_no_thinking",
             "source": "api",
-            "model": "test-model",
+            "model": "gemma2:9b",
             "changed": False,
         }
     ]
@@ -317,7 +317,7 @@ async def test_messages_handler_optimization_intercepts_before_provider_executio
     provider_getter = MagicMock()
     handler = MessagesHandler(Settings(), provider_getter=provider_getter)
     request = MessagesRequest(
-        model="nvidia_nim/test-model",
+        model="ollama/gemma2:9b",
         max_tokens=100,
         messages=[Message(role="user", content="quota check")],
     )
@@ -340,7 +340,7 @@ async def test_responses_handler_bypasses_message_only_optimizations() -> None:
     ):
         response = await handler.create(
             OpenAIResponsesRequest(
-                model="nvidia_nim/test-model",
+                model="ollama/gemma2:9b",
                 input="quota check",
             )
         )
@@ -359,7 +359,7 @@ async def test_responses_handler_does_not_apply_safety_classifier_policy() -> No
     with patch("api.handlers.messages.trace_event") as trace_mock:
         response = await handler.create(
             OpenAIResponsesRequest(
-                model="nvidia_nim/test-model",
+                model="ollama/gemma2:9b",
                 input=_CLASSIFIER_USER,
                 instructions=_CLASSIFIER_SYSTEM,
             )
@@ -384,7 +384,7 @@ def test_token_count_handler_routes_and_counts_tokens() -> None:
 
     response = handler.count(
         TokenCountRequest(
-            model="nvidia_nim/test-model",
+            model="ollama/gemma2:9b",
             messages=[Message(role="user", content="hi")],
         )
     )

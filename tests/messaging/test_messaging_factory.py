@@ -46,8 +46,6 @@ class TestCreateMessagingComponents:
             voice_note_enabled=False,
             whisper_model="large-v3",
             whisper_device="cuda",
-            huggingface_api_key="",
-            nvidia_nim_api_key="",
             messaging_rate_limit=1,
             messaging_rate_window=1.0,
             log_raw_messaging_content=False,
@@ -85,7 +83,7 @@ class TestCreateMessagingComponents:
                     allowed_discord_channels="123,456",
                     voice_note_enabled=False,
                     whisper_model="small",
-                    whisper_device="nvidia_nim",
+                    whisper_device="cpu",
                 ),
             )
 
@@ -98,9 +96,7 @@ class TestCreateMessagingComponents:
             allowed_channel_ids="123,456",
             voice_note_enabled=False,
             whisper_model="small",
-            whisper_device="nvidia_nim",
-            huggingface_api_key="",
-            nvidia_nim_api_key="",
+            whisper_device="cpu",
             messaging_rate_limit=1,
             messaging_rate_window=1.0,
             log_raw_messaging_content=False,

@@ -3,29 +3,8 @@ from pathlib import Path
 
 from messaging.platforms.factory import create_messaging_components
 from providers.base import BaseProvider
-from providers.cerebras import CerebrasProvider
-from providers.cloudflare import CloudflareProvider
-from providers.codestral import CodestralProvider
-from providers.cohere import CohereProvider
-from providers.deepseek import DeepSeekProvider
-from providers.fireworks import FireworksProvider
-from providers.gemini import GeminiProvider
-from providers.github_models import GitHubModelsProvider
-from providers.groq import GroqProvider
-from providers.huggingface import HuggingFaceProvider
-from providers.kimi import KimiProvider
-from providers.llamacpp import LlamaCppProvider
-from providers.lmstudio import LMStudioProvider
-from providers.minimax import MiniMaxProvider
-from providers.mistral import MistralProvider
-from providers.nvidia_nim import NvidiaNimProvider
+from providers.mahbub.client import MahbubProvider
 from providers.ollama import OllamaProvider
-from providers.open_router import OpenRouterProvider
-from providers.opencode import OpenCodeProvider
-from providers.sambanova import SambaNovaProvider
-from providers.vercel import VercelProvider
-from providers.wafer import WaferProvider
-from providers.zai import ZaiProvider
 from smoke.features import FEATURE_INVENTORY, README_FEATURES, feature_ids
 
 VALID_SOURCE = {"readme", "public_surface"}
@@ -82,30 +61,8 @@ def test_product_coverage_is_not_satisfied_by_prereq_probes() -> None:
 
 def test_provider_and_platform_registries_include_advertised_builtins() -> None:
     provider_classes = {
-        "nvidia_nim": NvidiaNimProvider,
-        "open_router": OpenRouterProvider,
-        "mistral": MistralProvider,
-        "mistral_codestral": CodestralProvider,
-        "deepseek": DeepSeekProvider,
-        "kimi": KimiProvider,
-        "minimax": MiniMaxProvider,
-        "fireworks": FireworksProvider,
-        "cloudflare": CloudflareProvider,
-        "lmstudio": LMStudioProvider,
-        "llamacpp": LlamaCppProvider,
         "ollama": OllamaProvider,
-        "wafer": WaferProvider,
-        "opencode": OpenCodeProvider,
-        "opencode_go": OpenCodeProvider,
-        "vercel": VercelProvider,
-        "huggingface": HuggingFaceProvider,
-        "cohere": CohereProvider,
-        "github_models": GitHubModelsProvider,
-        "zai": ZaiProvider,
-        "gemini": GeminiProvider,
-        "groq": GroqProvider,
-        "sambanova": SambaNovaProvider,
-        "cerebras": CerebrasProvider,
+        "mahbub": MahbubProvider,
     }
     for provider_class in provider_classes.values():
         assert issubclass(provider_class, BaseProvider)

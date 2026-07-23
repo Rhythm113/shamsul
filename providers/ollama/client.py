@@ -9,6 +9,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from config.provider_catalog import OLLAMA_DEFAULT_BASE
 from config.settings import Settings
 from core.anthropic.streaming import AnthropicStreamLedger
+from core.context import TokenBudgetManager, get_session_store, smart_compress_history
 from providers.base import CRITICAL_EXECUTION_CONSTRAINTS, ProviderConfig
 from providers.transports.openai_chat.stream import OpenAIChatStreamAdapter
 from providers.transports.openai_chat.transport import OpenAIChatTransport
@@ -602,16 +603,6 @@ class OllamaProvider(OpenAIChatTransport):
         except Exception as e:
             logger.warning("Failed to unload model '{}': {}", model_name, e)
 
-    def _prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Override to pass options like num_ctx to Ollama."""
-        body = super()._prepare_create_body(body)
-        if "extra_body" not in body:
-            body["extra_body"] = {}
-        if "options" not in body["extra_body"]:
-            body["extra_body"]["options"] = {}
-        body["extra_body"]["options"]["num_ctx"] = 32768
-        return body
-
     def _build_request_body(
         self, request: Any, thinking_enabled: bool | None = None
     ) -> dict:
@@ -627,24 +618,46 @@ class OllamaProvider(OpenAIChatTransport):
                 from copy import deepcopy
 
                 request_copy = deepcopy(request)
+            original_system = getattr(request_copy, "system", "") or ""
+            working_dir = (
+                extract_working_directory(original_system, request.messages)
+                or "default"
+            )
+            session_store = get_session_store(self._settings.context_store_max_files)
+            budget_manager = TokenBudgetManager(
+                max_tokens_head=self._settings.context_max_tokens_head,
+                max_tokens_coding=self._settings.context_max_tokens_coding,
+                max_tokens_tooling=self._settings.context_max_tokens_tooling,
+            )
+
             # Flatten structured Anthropic blocks to plain text for local models
             flattened = format_anthropic_messages_as_text(request.messages)
-            # R1/R2/R3: Compress history to reduce context window pressure
-            request_copy.messages = compress_message_history(
+            # R1/R2/R3: Smart history compression with SessionContextStore integration
+            compressed_msgs = smart_compress_history(
                 flattened,
+                session_id=working_dir,
                 recent_turn_count=self._settings.context_recent_turns,
                 max_result_chars=self._settings.context_max_result_chars,
                 max_write_content_lines=self._settings.context_max_write_lines,
+                session_store=session_store,
             )
-            # Compress the bloated Claude system prompt before conversion.
-            # Without this, the full ~8000-token Claude identity prompt is
-            # passed verbatim to the 7B model, causing hallucinations.
-            original_system = getattr(request_copy, "system", "") or ""
+
+            # Enforce coding token budget limit
+            coding_budget = budget_manager.get_budget_for_role("coding")
             compressed = compress_system_prompt(original_system)
             platform = detect_os_platform(original_system)
+            file_map_summary = session_store.get_active_files_summary(
+                working_dir, max_chars=2000
+            )
+
+            request_copy.messages = budget_manager.fit_messages_to_budget(
+                compressed_msgs, compressed, coding_budget
+            )
+            system_extra = f"\n{file_map_summary}" if file_map_summary else ""
             request_copy.system = (
                 f"{compressed}\n"
                 f"Operating System Platform: {platform.upper()}\n"
+                f"{system_extra}\n"
                 f"{CRITICAL_EXECUTION_CONSTRAINTS}"
             )
             body = build_base_request_body(
@@ -808,7 +821,6 @@ class OllamaProvider(OpenAIChatTransport):
                 model=self._settings.ollama_reasoning_model,
                 messages=reasoning_messages,
                 stream=True,
-                extra_body={"options": {"num_ctx": 32768}},
             )
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:

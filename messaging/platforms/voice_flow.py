@@ -103,7 +103,6 @@ class VoiceNoteFlow:
         self._pending_voice = PendingVoiceRegistry()
         self._voice_transcription = VoiceTranscriptionService(
             huggingface_api_key=huggingface_api_key,
-            nvidia_nim_api_key=nvidia_nim_api_key,
         )
 
     @property

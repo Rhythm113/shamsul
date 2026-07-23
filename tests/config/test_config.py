@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from config.constants import (
-    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
 )
 from config.env_files import ANTHROPIC_AUTH_TOKEN_ENV, process_env_key_is_effective
@@ -15,7 +14,6 @@ from config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
-from config.nim import NimSettings
 from config.paths import default_claude_workspace_path
 
 
@@ -42,7 +40,6 @@ class TestSettings:
         assert settings.model == "mahbub/hybrid"
         assert isinstance(settings.provider_rate_limit, int)
         assert isinstance(settings.provider_rate_window, int)
-        assert isinstance(settings.nim.temperature, float)
         assert isinstance(settings.fast_prefix_detection, bool)
         assert isinstance(settings.enable_model_thinking, bool)
         assert settings.http_read_timeout == 120.0
@@ -177,14 +174,6 @@ class TestSettings:
         s2 = get_settings()
         assert s1 is s2  # Same object (cached)
 
-    def test_empty_string_to_none_for_optional_int(self):
-        """Test that empty string converts to None for optional int fields."""
-        from config.settings import Settings
-
-        # Settings should handle NVIDIA_NIM_SEED="" gracefully
-        settings = Settings()
-        assert settings.nim.seed is None or isinstance(settings.nim.seed, int)
-
     def test_model_setting(self):
         """Test model setting exists and is a string."""
         from config.settings import Settings
@@ -192,20 +181,6 @@ class TestSettings:
         settings = Settings()
         assert isinstance(settings.model, str)
         assert len(settings.model) > 0
-
-    def test_base_url_constant(self):
-        """Test NVIDIA_NIM_DEFAULT_BASE is a constant."""
-        from providers.nvidia_nim import NVIDIA_NIM_DEFAULT_BASE
-
-        assert NVIDIA_NIM_DEFAULT_BASE == "https://integrate.api.nvidia.com/v1"
-
-    def test_lm_studio_base_url_from_env(self, monkeypatch):
-        """LM_STUDIO_BASE_URL env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("LM_STUDIO_BASE_URL", "http://custom:5678/v1")
-        settings = Settings()
-        assert settings.lm_studio_base_url == "http://custom:5678/v1"
 
     def test_ollama_base_url_defaults_to_root(self, monkeypatch):
         """OLLAMA_BASE_URL defaults to the Anthropic-compatible Ollama root URL."""
@@ -283,38 +258,6 @@ class TestSettings:
         monkeypatch.setenv("ENABLE_MODEL_THINKING", "false")
         settings = Settings()
         assert settings.enable_model_thinking is False
-
-    def test_wafer_api_key_from_env(self, monkeypatch):
-        """WAFER_API_KEY env var is loaded into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("WAFER_API_KEY", "wafer-key")
-        settings = Settings()
-        assert settings.wafer_api_key == "wafer-key"
-
-    def test_minimax_settings_from_env(self, monkeypatch):
-        """MiniMax key and proxy env vars load into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-        monkeypatch.setenv("MINIMAX_PROXY", "http://proxy.test:8080")
-        settings = Settings()
-        assert settings.minimax_api_key == "minimax-key"
-        assert settings.minimax_proxy == "http://proxy.test:8080"
-
-    def test_cloudflare_settings_from_env(self, monkeypatch):
-        """Cloudflare token, account, and proxy env vars load into settings."""
-        from config.settings import Settings
-
-        monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
-        monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "cf-account")
-        monkeypatch.setenv("CLOUDFLARE_PROXY", "http://proxy.test:8080")
-        settings = Settings()
-        assert settings.cloudflare_api_token == "cf-token"
-        assert settings.cloudflare_account_id == "cf-account"
-        assert settings.cloudflare_proxy == "http://proxy.test:8080"
-
-    # (Deprecated vercel, huggingface, cohere, github_models, and sambanova tests removed)
 
     def test_per_model_thinking_from_env(self, monkeypatch):
         """Per-model thinking env vars are loaded into settings."""
@@ -445,140 +388,6 @@ class TestSettings:
         assert settings.enable_model_thinking is True
 
 
-# --- NimSettings Validation Tests ---
-class TestNimSettingsValidBounds:
-    """Test that valid values within bounds are accepted."""
-
-    @pytest.mark.parametrize("top_k", [-1, 0, 1, 100])
-    def test_top_k_valid(self, top_k):
-        """top_k >= -1 should be accepted."""
-        s = NimSettings(top_k=top_k)
-        assert s.top_k == top_k
-
-    @pytest.mark.parametrize("temp", [0.0, 0.5, 1.0, 2.0])
-    def test_temperature_valid(self, temp):
-        s = NimSettings(temperature=temp)
-        assert s.temperature == temp
-
-    @pytest.mark.parametrize("top_p", [0.0, 0.5, 1.0])
-    def test_top_p_valid(self, top_p):
-        s = NimSettings(top_p=top_p)
-        assert s.top_p == top_p
-
-    def test_max_tokens_valid(self):
-        s = NimSettings(max_tokens=1)
-        assert s.max_tokens == 1
-
-    def test_min_tokens_valid(self):
-        s = NimSettings(min_tokens=0)
-        assert s.min_tokens == 0
-
-    @pytest.mark.parametrize("penalty", [-2.0, 0.0, 2.0])
-    def test_presence_penalty_valid(self, penalty):
-        s = NimSettings(presence_penalty=penalty)
-        assert s.presence_penalty == penalty
-
-    @pytest.mark.parametrize("penalty", [-2.0, 0.0, 2.0])
-    def test_frequency_penalty_valid(self, penalty):
-        s = NimSettings(frequency_penalty=penalty)
-        assert s.frequency_penalty == penalty
-
-    @pytest.mark.parametrize("min_p", [0.0, 0.5, 1.0])
-    def test_min_p_valid(self, min_p):
-        s = NimSettings(min_p=min_p)
-        assert s.min_p == min_p
-
-
-class TestNimSettingsInvalidBounds:
-    """Test that out-of-range values raise ValidationError."""
-
-    @pytest.mark.parametrize("top_k", [-2, -100])
-    def test_top_k_below_lower_bound(self, top_k):
-        with pytest.raises((ValidationError, ValueError)):
-            NimSettings(top_k=top_k)
-
-    def test_temperature_negative(self):
-        with pytest.raises(ValidationError):
-            NimSettings(temperature=-0.1)
-
-    @pytest.mark.parametrize("top_p", [-0.1, 1.1])
-    def test_top_p_out_of_range(self, top_p):
-        with pytest.raises(ValidationError):
-            NimSettings(top_p=top_p)
-
-    @pytest.mark.parametrize("penalty", [-2.1, 2.1])
-    def test_presence_penalty_out_of_range(self, penalty):
-        with pytest.raises(ValidationError):
-            NimSettings(presence_penalty=penalty)
-
-    @pytest.mark.parametrize("penalty", [-2.1, 2.1])
-    def test_frequency_penalty_out_of_range(self, penalty):
-        with pytest.raises(ValidationError):
-            NimSettings(frequency_penalty=penalty)
-
-    @pytest.mark.parametrize("min_p", [-0.1, 1.1])
-    def test_min_p_out_of_range(self, min_p):
-        with pytest.raises(ValidationError):
-            NimSettings(min_p=min_p)
-
-    @pytest.mark.parametrize("max_tokens", [0, -1])
-    def test_max_tokens_too_low(self, max_tokens):
-        with pytest.raises(ValidationError):
-            NimSettings(max_tokens=max_tokens)
-
-    def test_min_tokens_negative(self):
-        with pytest.raises(ValidationError):
-            NimSettings(min_tokens=-1)
-
-
-class TestNimSettingsValidators:
-    """Test custom field validators in NimSettings."""
-
-    def test_default_max_tokens_matches_shared_constant(self):
-        assert NimSettings().max_tokens == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-
-    @pytest.mark.parametrize(
-        "seed_val,expected",
-        [("", None), (None, None), ("42", 42), (42, 42)],
-        ids=["empty_str", "none", "str_42", "int_42"],
-    )
-    def test_parse_optional_int(self, seed_val, expected):
-        s = NimSettings(seed=seed_val)
-        assert s.seed == expected
-
-    @pytest.mark.parametrize(
-        "stop_val,expected",
-        [("", None), ("STOP", "STOP"), (None, None)],
-        ids=["empty_str", "valid", "none"],
-    )
-    def test_parse_optional_str_stop(self, stop_val, expected):
-        s = NimSettings(stop=stop_val)
-        assert s.stop == expected
-
-    @pytest.mark.parametrize(
-        "chat_template_val,expected",
-        [("", None), ("template", "template")],
-        ids=["empty_str", "valid"],
-    )
-    def test_parse_optional_str_chat_template(self, chat_template_val, expected):
-        s = NimSettings(chat_template=chat_template_val)
-        assert s.chat_template == expected
-
-    def test_extra_forbid_rejects_unknown_field(self):
-        """NimSettings with extra='forbid' rejects unknown fields."""
-        from typing import Any, cast
-
-        with pytest.raises(ValidationError):
-            NimSettings(**cast(Any, {"unknown_field": "value"}))
-
-    def test_enable_thinking_field_removed(self):
-        """NimSettings no longer accepts the removed thinking toggle."""
-        from typing import Any, cast
-
-        with pytest.raises(ValidationError):
-            NimSettings(**cast(Any, {"enable_thinking": True}))
-
-
 class TestSettingsOptionalStr:
     """Test Settings parse_optional_str validator."""
 
@@ -659,9 +468,9 @@ class TestPerModelMapping:
         """MODEL_OPUS env var is loaded."""
         from config.settings import Settings
 
-        monkeypatch.setenv("MODEL_OPUS", "open_router/deepseek/deepseek-r1")
+        monkeypatch.setenv("MODEL_OPUS", "mahbub/hybrid")
         s = Settings()
-        assert s.model_opus == "open_router/deepseek/deepseek-r1"
+        assert s.model_opus == "mahbub/hybrid"
 
     @pytest.mark.parametrize("env_var", ["MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"])
     def test_empty_model_override_env_is_unset(self, monkeypatch, env_var):
@@ -682,39 +491,15 @@ class TestPerModelMapping:
     @pytest.mark.parametrize(
         "env_vars,expected_model,expected_haiku",
         [
-            (
-                {"MODEL": "nvidia_nim/meta/llama3-70b-instruct"},
-                "nvidia_nim/meta/llama3-70b-instruct",
-                None,
-            ),
+            ({"MODEL": "ollama/gemma2:9b"}, "ollama/gemma2:9b", None),
             (
                 {
-                    "MODEL": "open_router/anthropic/claude-3-opus",
-                    "MODEL_HAIKU": "open_router/anthropic/claude-3-haiku",
+                    "MODEL": "mahbub/hybrid",
+                    "MODEL_HAIKU": "ollama/qwen2.5-coder:7b",
                 },
-                "open_router/anthropic/claude-3-opus",
-                "open_router/anthropic/claude-3-haiku",
+                "mahbub/hybrid",
+                "ollama/qwen2.5-coder:7b",
             ),
-            ({"MODEL": "deepseek/deepseek-chat"}, "deepseek/deepseek-chat", None),
-            ({"MODEL": "wafer/DeepSeek-V4-Pro"}, "wafer/DeepSeek-V4-Pro", None),
-            (
-                {"MODEL": "cloudflare/@cf/moonshotai/kimi-k2.6"},
-                "cloudflare/@cf/moonshotai/kimi-k2.6",
-                None,
-            ),
-            (
-                {"MODEL": "github_models/openai/gpt-4.1"},
-                "github_models/openai/gpt-4.1",
-                None,
-            ),
-            (
-                {"MODEL": "sambanova/Meta-Llama-3.3-70B-Instruct"},
-                "sambanova/Meta-Llama-3.3-70B-Instruct",
-                None,
-            ),
-            ({"MODEL": "lmstudio/qwen2.5-7b"}, "lmstudio/qwen2.5-7b", None),
-            ({"MODEL": "llamacpp/local-model"}, "llamacpp/local-model", None),
-            ({"MODEL": "ollama/llama3.1"}, "ollama/llama3.1", None),
         ],
     )
     def test_settings_models_from_env(
@@ -734,17 +519,17 @@ class TestPerModelMapping:
         """MODEL_SONNET env var is loaded."""
         from config.settings import Settings
 
-        monkeypatch.setenv("MODEL_SONNET", "nvidia_nim/meta/llama-3.3-70b-instruct")
+        monkeypatch.setenv("MODEL_SONNET", "ollama/gemma2:9b")
         s = Settings()
-        assert s.model_sonnet == "nvidia_nim/meta/llama-3.3-70b-instruct"
+        assert s.model_sonnet == "ollama/gemma2:9b"
 
     def test_model_haiku_from_env(self, monkeypatch):
         """MODEL_HAIKU env var is loaded."""
         from config.settings import Settings
 
-        monkeypatch.setenv("MODEL_HAIKU", "lmstudio/qwen2.5-7b")
+        monkeypatch.setenv("MODEL_HAIKU", "ollama/qwen2.5-coder:7b")
         s = Settings()
-        assert s.model_haiku == "lmstudio/qwen2.5-7b"
+        assert s.model_haiku == "ollama/qwen2.5-coder:7b"
 
     def test_model_opus_invalid_provider_raises(self, monkeypatch):
         """MODEL_OPUS with invalid provider prefix raises ValidationError."""

@@ -51,7 +51,7 @@ def test_create_response_stream_routes_through_provider(
     response = client.post(
         "/v1/responses",
         json={
-            "model": "nvidia_nim/test-model",
+            "model": "ollama/gemma2:9b",
             "input": "Hello",
             "max_output_tokens": 32,
         },
@@ -67,7 +67,7 @@ def test_create_response_stream_routes_through_provider(
     )
     assert provider.preflight_stream.called
     routed = provider.requests[0]
-    assert routed.model == "test-model"
+    assert routed.model == "gemma2:9b"
     assert routed.messages[0].role == "user"
     assert routed.messages[0].content == "Hello"
     assert routed.max_tokens == 32
@@ -87,7 +87,7 @@ def test_create_response_stream_bypasses_local_message_optimizations() -> None:
         response = client.post(
             "/v1/responses",
             json={
-                "model": "nvidia_nim/test-model",
+                "model": "ollama/gemma2:9b",
                 "input": "quota check",
             },
         )
@@ -106,7 +106,7 @@ def test_create_response_stream_false_returns_openai_error(
     response = client.post(
         "/v1/responses",
         json={
-            "model": "nvidia_nim/test-model",
+            "model": "ollama/gemma2:9b",
             "input": "Hello",
             "stream": False,
         },
@@ -129,7 +129,7 @@ def test_create_response_stream_preserves_interleaved_reasoning_order() -> None:
         response = client.post(
             "/v1/responses",
             json={
-                "model": "nvidia_nim/test-model",
+                "model": "ollama/gemma2:9b",
                 "input": "Use reasoning and tools",
                 "stream": True,
                 "tools": [

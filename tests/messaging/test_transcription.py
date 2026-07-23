@@ -98,24 +98,6 @@ def test_transcribe_invalid_device_raises():
         path.unlink(missing_ok=True)
 
 
-def test_transcribe_nim_requires_api_key():
-    """NIM path rejects empty API key without reading global settings."""
-    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
-        f.write(b"fake ogg")
-        path = Path(f.name)
-    try:
-        with pytest.raises(ValueError, match="non-empty"):
-            transcribe_audio(
-                path,
-                "audio/ogg",
-                whisper_device="nvidia_nim",
-                whisper_model="openai/whisper-large-v3",
-                nvidia_nim_api_key="",
-            )
-    finally:
-        path.unlink(missing_ok=True)
-
-
 def test_transcribe_local_import_error_raises():
     """Local backend when voice_local extra not installed raises ImportError."""
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:

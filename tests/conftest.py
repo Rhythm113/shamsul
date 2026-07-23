@@ -10,8 +10,7 @@ import pytest
 from config.settings import Settings
 
 # Set mock environment BEFORE any imports that use Settings
-os.environ.setdefault("NVIDIA_NIM_API_KEY", "test_key")
-os.environ.setdefault("MODEL", "nvidia_nim/test-model")
+os.environ.setdefault("MODEL", "ollama/gemma2:9b")
 os.environ["PTB_TIMEDELTA"] = "1"
 # Ensure tests don't pick up a server API key from the repo .env
 # (tests expect endpoints to be unauthenticated by default)
@@ -33,54 +32,18 @@ def provider_config():
     from providers.base import ProviderConfig
 
     return ProviderConfig(
-        api_key="test_key",
-        base_url="https://test.api.nvidia.com/v1",
+        api_key="ollama",
+        base_url="http://localhost:11434",
         rate_limit=10,
         rate_window=60,
     )
 
 
 @pytest.fixture
-def nim_provider(provider_config):
-    from config.nim import NimSettings
-    from providers.nvidia_nim import NvidiaNimProvider
+def ollama_provider(provider_config):
+    from providers.ollama import OllamaProvider
 
-    return NvidiaNimProvider(provider_config, nim_settings=NimSettings())
-
-
-@pytest.fixture
-def open_router_provider(provider_config):
-    from providers.open_router import OpenRouterProvider
-
-    return OpenRouterProvider(provider_config)
-
-
-@pytest.fixture
-def lmstudio_provider(provider_config):
-    from providers.base import ProviderConfig
-    from providers.lmstudio import LMStudioProvider
-
-    lmstudio_config = ProviderConfig(
-        api_key="lm-studio",
-        base_url="http://localhost:1234/v1",
-        rate_limit=provider_config.rate_limit,
-        rate_window=provider_config.rate_window,
-    )
-    return LMStudioProvider(lmstudio_config)
-
-
-@pytest.fixture
-def llamacpp_provider(provider_config):
-    from providers.base import ProviderConfig
-    from providers.llamacpp import LlamaCppProvider
-
-    llamacpp_config = ProviderConfig(
-        api_key="llamacpp",
-        base_url="http://localhost:8080/v1",
-        rate_limit=10,
-        rate_window=60,
-    )
-    return LlamaCppProvider(llamacpp_config)
+    return OllamaProvider(provider_config)
 
 
 @pytest.fixture

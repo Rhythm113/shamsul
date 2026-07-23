@@ -48,10 +48,8 @@ class VoiceTranscriptionService:
         self,
         *,
         huggingface_api_key: str = "",
-        nvidia_nim_api_key: str = "",
     ) -> None:
         self._huggingface_api_key = huggingface_api_key
-        self._nvidia_nim_api_key = nvidia_nim_api_key
 
     async def transcribe(
         self,
@@ -70,5 +68,4 @@ class VoiceTranscriptionService:
             whisper_model=whisper_model,
             whisper_device=whisper_device,
             huggingface_api_key=self._huggingface_api_key,
-            nvidia_nim_api_key=self._nvidia_nim_api_key,
         )

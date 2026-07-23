@@ -245,57 +245,8 @@ class SmokeConfig:
         return bool(os.getenv(f"FCC_SMOKE_MODEL_{provider.upper()}"))
 
     def has_provider_configuration(self, provider: str) -> bool:
-        if provider == "nvidia_nim":
-            return bool(self.settings.nvidia_nim_api_key.strip())
-        if provider == "open_router":
-            return bool(self.settings.open_router_api_key.strip())
-        if provider == "mistral":
-            return bool(self.settings.mistral_api_key.strip())
-        if provider == "mistral_codestral":
-            return bool(self.settings.codestral_api_key.strip())
-        if provider == "deepseek":
-            return bool(self.settings.deepseek_api_key.strip())
-        if provider == "kimi":
-            return bool(self.settings.kimi_api_key.strip())
-        if provider == "lmstudio":
-            return bool(self.settings.lm_studio_base_url.strip())
-        if provider == "llamacpp":
-            return bool(self.settings.llamacpp_base_url.strip())
-        if provider == "ollama":
+        if provider in ("ollama", "mahbub"):
             return bool(self.settings.ollama_base_url.strip())
-        if provider == "wafer":
-            return bool(self.settings.wafer_api_key.strip())
-        if provider == "minimax":
-            return bool(self.settings.minimax_api_key.strip())
-        if provider == "fireworks":
-            return bool(self.settings.fireworks_api_key.strip())
-        if provider == "opencode":
-            return bool(self.settings.opencode_api_key.strip())
-        if provider == "opencode_go":
-            return bool(self.settings.opencode_api_key.strip())
-        if provider == "vercel":
-            return bool(self.settings.vercel_ai_gateway_api_key.strip())
-        if provider == "huggingface":
-            return bool(self.settings.huggingface_api_key.strip())
-        if provider == "cohere":
-            return bool(self.settings.cohere_api_key.strip())
-        if provider == "github_models":
-            return bool(self.settings.github_models_token.strip())
-        if provider == "zai":
-            return bool(self.settings.zai_api_key.strip())
-        if provider == "gemini":
-            return bool(self.settings.gemini_api_key.strip())
-        if provider == "groq":
-            return bool(self.settings.groq_api_key.strip())
-        if provider == "sambanova":
-            return bool(self.settings.sambanova_api_key.strip())
-        if provider == "cerebras":
-            return bool(self.settings.cerebras_api_key.strip())
-        if provider == "cloudflare":
-            return bool(
-                self.settings.cloudflare_api_token.strip()
-                and self.settings.cloudflare_account_id.strip()
-            )
         return False
 
 
