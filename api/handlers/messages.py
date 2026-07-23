@@ -22,6 +22,7 @@ from api.web_tools.streaming import stream_web_server_tool_response
 from config.provider_catalog import PROVIDER_CATALOG
 from config.settings import Settings
 from core.anthropic import aggregate_anthropic_sse_to_message, get_token_count
+from core.context.compressor import smart_compress_history
 from core.trace import trace_event
 from providers.base import BaseProvider
 from providers.exceptions import InvalidRequestError, ProviderError
@@ -80,6 +81,19 @@ class MessagesHandler:
             routed = self._model_router.resolve_messages_request(request_data)
             routed = self._apply_message_routing_policies(routed)
             self._reject_unsupported_server_tools(routed)
+
+            if routed.request.messages:
+                compressed_messages = smart_compress_history(
+                    routed.request.messages,
+                    session_id="shamsul-claude",
+                    max_result_chars=1500,
+                )
+                routed = RoutedMessagesRequest(
+                    resolved=routed.resolved,
+                    request=routed.request.model_copy(
+                        update={"messages": compressed_messages}
+                    ),
+                )
 
             result = self._run_message_intercepts(routed)
             if result is None:

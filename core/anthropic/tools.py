@@ -64,6 +64,48 @@ def resolve_tool_name(name: str, allowed: set[str] | None) -> str | None:
     return None
 
 
+def normalize_tool_parameters(
+    tool_name: str | None, tool_input: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize tool parameter keys for Claude Code CLI and local models."""
+    if not isinstance(tool_input, dict):
+        return tool_input
+
+    res = dict(tool_input)
+
+    # 1. File path alias mapping
+    if "file_path" not in res and "path" not in res:
+        alias_file = (
+            res.get("TargetFile") or res.get("AbsolutePath") or res.get("filename")
+        )
+        if alias_file:
+            res["file_path"] = alias_file
+
+    # 2. Content alias mapping
+    if "code" not in res and "content" not in res:
+        alias_content = res.get("CodeContent") or res.get("text")
+        if alias_content:
+            res["code"] = alias_content
+
+    # 3. Edit old string mapping
+    if "old_string" not in res and "TargetContent" not in res and "target" not in res:
+        pass
+
+    # 4. Search pattern mapping
+    if "pattern" not in res:
+        alias_pattern = res.get("query") or res.get("SearchQuery")
+        if alias_pattern:
+            res["pattern"] = alias_pattern
+
+    # 5. Command execution mapping
+    if "command" not in res:
+        alias_cmd = res.get("CommandLine") or res.get("cmd")
+        if alias_cmd:
+            res["command"] = alias_cmd
+
+    return res
+
+
 def is_potential_tool_call_start(buf: str) -> bool:
     stripped = buf.lstrip("●").lstrip()
     if not stripped:
@@ -96,7 +138,7 @@ class HeuristicToolParser:
         r"(?is)\b(?:use\s+)?(?P<tool>WebFetch|WebSearch)\b.*?(?P<json>\{.*?\})"
     )
     _STRAY_TAGS_RE = re.compile(
-        r"(</?(?:parameter|param|function|file_path|content|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cwd)(?:=[^>]*)?>|●?\s*<function=[^>]*>)",
+        r"(</?(?:parameter|param|function|file_path|path|content|code|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern)(?:=[^>]*)?>|●?\s*<function=[^>]*>|●?\s*<parameter=[^>]*>)",
         re.IGNORECASE,
     )
 
@@ -339,7 +381,7 @@ class HeuristicToolParser:
                         "type": "tool_use",
                         "id": f"toolu_heuristic_{uuid.uuid4().hex[:8]}",
                         "name": tool_name,
-                        "input": tool_input,
+                        "input": normalize_tool_parameters(tool_name, tool_input),
                     }
                 )
                 logger.debug(
@@ -490,7 +532,9 @@ class HeuristicToolParser:
                             "type": "tool_use",
                             "id": self._current_tool_id,
                             "name": self._current_function_name,
-                            "input": self._current_parameters,
+                            "input": normalize_tool_parameters(
+                                self._current_function_name, self._current_parameters
+                            ),
                         }
                     )
                     logger.debug(
@@ -529,7 +573,9 @@ class HeuristicToolParser:
                     "type": "tool_use",
                     "id": self._current_tool_id,
                     "name": self._current_function_name,
-                    "input": self._current_parameters,
+                    "input": normalize_tool_parameters(
+                        self._current_function_name, self._current_parameters
+                    ),
                 }
             )
             self._state = ParserState.TEXT
