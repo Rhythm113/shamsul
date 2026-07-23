@@ -470,13 +470,13 @@
                     </div>
             </div>
 
-            <!-- Context Compression Settings Card -->
+            <!-- Context Compression & Token Budget Settings Card -->
             <div class="card col-12">
                 <div class="card-header">
-                    <h2 class="card-title">Context Compression & Window Settings</h2>
+                    <h2 class="card-title">Context Store & Token Budget Settings</h2>
                     <span class="card-badge">Performance</span>
                 </div>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; width: 100%;">
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; width: 100%; margin-bottom: 15px;">
                     <div class="form-group" style="margin-bottom: 0;">
                         <label for="context-recent-turns">Recent Turns to Keep Uncompressed</label>
                         <input type="number" id="context-recent-turns" min="0" required>
@@ -492,6 +492,20 @@
                     <div class="form-group" style="margin-bottom: 0;">
                         <label for="context-max-write-lines">Max Code Lines in History</label>
                         <input type="number" id="context-max-write-lines" min="0" required>
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; width: 100%;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="context-max-tokens-head">Head Model Token Budget</label>
+                        <input type="number" id="context-max-tokens-head" min="1024" max="32768" required>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="context-max-tokens-coding">Coding Model Token Budget</label>
+                        <input type="number" id="context-max-tokens-coding" min="1024" max="32768" required>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="context-max-tokens-tooling">Tooling Model Token Budget</label>
+                        <input type="number" id="context-max-tokens-tooling" min="1024" max="16384" required>
                     </div>
                 </div>
             </div>
@@ -657,11 +671,14 @@
                 document.getElementById('voice-model').value = config.ollama_voice_model || '';
                 document.getElementById('image-model').value = config.ollama_image_model || '';
                 
-                // Populate context compression fields
-                document.getElementById('context-recent-turns').value = config.context_recent_turns !== undefined ? config.context_recent_turns : 3;
+                // Populate context compression & token budget fields
+                document.getElementById('context-recent-turns').value = config.context_recent_turns !== undefined ? config.context_recent_turns : 2;
                 document.getElementById('context-head-recent-turns').value = config.context_head_recent_turns !== undefined ? config.context_head_recent_turns : 5;
-                document.getElementById('context-max-result-chars').value = config.context_max_result_chars !== undefined ? config.context_max_result_chars : 3000;
-                document.getElementById('context-max-write-lines').value = config.context_max_write_lines !== undefined ? config.context_max_write_lines : 10;
+                document.getElementById('context-max-result-chars').value = config.context_max_result_chars !== undefined ? config.context_max_result_chars : 1500;
+                document.getElementById('context-max-write-lines').value = config.context_max_write_lines !== undefined ? config.context_max_write_lines : 5;
+                document.getElementById('context-max-tokens-head').value = config.context_max_tokens_head !== undefined ? config.context_max_tokens_head : 8192;
+                document.getElementById('context-max-tokens-coding').value = config.context_max_tokens_coding !== undefined ? config.context_max_tokens_coding : 8192;
+                document.getElementById('context-max-tokens-tooling').value = config.context_max_tokens_tooling !== undefined ? config.context_max_tokens_tooling : 4096;
 
                 activeReasoningPrompt = config.ollama_reasoning_system_prompt || DEFAULT_PROMPT;
 
@@ -696,7 +713,10 @@
                 context_recent_turns: parseInt(document.getElementById('context-recent-turns').value, 10),
                 context_head_recent_turns: parseInt(document.getElementById('context-head-recent-turns').value, 10),
                 context_max_result_chars: parseInt(document.getElementById('context-max-result-chars').value, 10),
-                context_max_write_lines: parseInt(document.getElementById('context-max-write-lines').value, 10)
+                context_max_write_lines: parseInt(document.getElementById('context-max-write-lines').value, 10),
+                context_max_tokens_head: parseInt(document.getElementById('context-max-tokens-head').value, 10),
+                context_max_tokens_coding: parseInt(document.getElementById('context-max-tokens-coding').value, 10),
+                context_max_tokens_tooling: parseInt(document.getElementById('context-max-tokens-tooling').value, 10)
             };
             
             try {
