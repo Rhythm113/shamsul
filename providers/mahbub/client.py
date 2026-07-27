@@ -274,6 +274,7 @@ class MahbubProvider(BaseProvider):
                         if del_chunk:
                             delegate_decision += del_chunk
                         if other_chunk:
+                            yield ledger.emit_thinking_delta(other_chunk)
                             guidance_text += other_chunk
 
                 elif event_type == "error":
@@ -334,14 +335,12 @@ class MahbubProvider(BaseProvider):
             ),
         )
 
-        # Prepend guidance text and bridge delegation marker
-        guidance_content = (
-            guidance_text.strip() if guidance_text.strip() else "Direct execution."
-        )
+        # Prepend clean execution guidance and bridge delegation marker
         guidance_header = (
             f"\n\n--- BRIDGE DELEGATION ACTIVE ---\n"
-            f"--- LEAD REASONING AGENT GUIDANCE ---\n"
-            f"{guidance_content}\n"
+            f"Execution Role: {target.upper()} EXECUTOR.\n"
+            f"DIRECTIVE: Execute the task directly using real tool calls (Read/view_file, Write/write_to_file, Edit/replace_file_content, Bash/run_command).\n"
+            f"Do not ask conversational questions or request file contents when tools are available to read files from disk.\n"
             f"--------------------------------------\n"
             f"{CRITICAL_EXECUTION_CONSTRAINTS}"
         )

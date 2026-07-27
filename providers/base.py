@@ -190,5 +190,6 @@ CRITICAL_EXECUTION_CONSTRAINTS = """
 8. If you are unsure what to do, call ONE tool at a time and wait for its result before proceeding.
 9. Keep your response focused on exactly ONE step at a time. Do not plan multiple steps ahead in your output.
 10. DO NOT reference files, functions, or variables that you have not read with a tool in this conversation.
+11. When asked to inspect a file (e.g. req.txt) or build a project, execute tool calls (Read/view_file) immediately to inspect the file. NEVER ask the user to provide file contents or ask why there is no planning when tools are available.
 --------------------------------------
 """
