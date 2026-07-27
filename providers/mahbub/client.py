@@ -32,6 +32,19 @@ _FORWARD_STRAY_TAGS_RE = re.compile(
 )
 
 
+def _message_to_dict(m: Any) -> dict[str, Any]:
+    if isinstance(m, dict):
+        return m
+    if hasattr(m, "model_dump"):
+        return m.model_dump()
+    if hasattr(m, "__dict__") and m.__dict__:
+        return m.__dict__
+    return {
+        "role": getattr(m, "role", ""),
+        "content": getattr(m, "content", ""),
+    }
+
+
 def append_system_prompt(
     system_val: str | list | None, text_to_append: str
 ) -> str | list:
@@ -218,7 +231,7 @@ class MahbubProvider(BaseProvider):
 
         # Compress history with smart compressor + token budget
         flattened_for_head = format_anthropic_messages_as_text(
-            [m if isinstance(m, dict) else m.__dict__ for m in head_req.messages]
+            [_message_to_dict(m) for m in head_req.messages]
         )
         compressed_head_msgs = smart_compress_history(
             flattened_for_head,
@@ -327,7 +340,7 @@ class MahbubProvider(BaseProvider):
 
         # Compress history with smart compressor + token budget
         flattened_for_target = format_anthropic_messages_as_text(
-            [m if isinstance(m, dict) else m.__dict__ for m in target_req.messages]
+            [_message_to_dict(m) for m in target_req.messages]
         )
         compressed_target_msgs = smart_compress_history(
             flattened_for_target,
