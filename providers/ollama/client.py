@@ -809,6 +809,22 @@ class OllamaProvider(OpenAIChatTransport):
                 cast(ChatCompletionMessageParam, {"role": role, "content": content})
             )
 
+        reasoning_messages.insert(
+            0,
+            cast(
+                ChatCompletionMessageParam,
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the Head Reasoning Agent. Provide a concise 1-sentence "
+                        "action plan explaining which tool call (Read, Write, Edit, Bash) "
+                        "should be executed first to fulfill the user's request. "
+                        "DO NOT recite system constraints, role rules, or plan mode text."
+                    ),
+                },
+            ),
+        )
+
         # 3. Stream the Reasoning Model's response as a thinking block
         logger.info(
             "Starting context engineering reasoning phase using model: {}",

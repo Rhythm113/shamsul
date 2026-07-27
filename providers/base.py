@@ -191,5 +191,6 @@ CRITICAL_EXECUTION_CONSTRAINTS = """
 9. Keep your response focused on exactly ONE step at a time. Do not plan multiple steps ahead in your output.
 10. DO NOT reference files, functions, or variables that you have not read with a tool in this conversation.
 11. When asked to inspect a file (e.g. req.txt) or build a project, execute tool calls (Read/view_file) immediately to inspect the file. NEVER ask the user to provide file contents or ask why there is no planning when tools are available.
+12. DO NOT output meta-commentary, rule summaries, or statements like 'I understand my role constraints' or 'ExitPlanMode'. Start your output IMMEDIATELY with a tool call (e.g. ● <function=Read>).
 --------------------------------------
 """
