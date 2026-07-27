@@ -1,5 +1,6 @@
 import contextlib
 import json
+import re
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 
@@ -18,6 +19,16 @@ from providers.base import (
 from providers.ollama.client import (
     extract_working_directory,
     format_anthropic_messages_as_text,
+)
+
+# Regex to strip stray XML parameter/function tags from forwarded SSE text.
+_FORWARD_STRAY_TAGS_RE = re.compile(
+    r"(</?(?:parameter|param|function|file_path|path|content|code|TargetFile|"
+    r"Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|"
+    r"AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|"
+    r"IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern)"
+    r"(?:=[^>]*)?>|●?\s*<function=[^>]*>|●?\s*<parameter=[^>]*>)",
+    re.IGNORECASE,
 )
 
 
@@ -335,10 +346,37 @@ class MahbubProvider(BaseProvider):
             ),
         )
 
+        # Extract the user's last request text so the delegate never forgets what was asked.
+        last_user_request = ""
+        for msg in reversed(request.messages):
+            role = (
+                msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+            )
+            if role == "user":
+                content = (
+                    msg.get("content")
+                    if isinstance(msg, dict)
+                    else getattr(msg, "content", None)
+                )
+                if isinstance(content, str):
+                    last_user_request = content[:500]
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            last_user_request = block.get("text", "")[:500]
+                            break
+                break
+
         # Prepend clean execution guidance and bridge delegation marker
+        task_line = (
+            f"CURRENT TASK (do this NOW, do not ask questions): {last_user_request}\n"
+            if last_user_request
+            else ""
+        )
         guidance_header = (
             f"\n\n--- BRIDGE DELEGATION ACTIVE ---\n"
             f"Execution Role: {target.upper()} EXECUTOR.\n"
+            f"{task_line}"
             f"DIRECTIVE: Execute the task directly using real tool calls (Read/view_file, Write/write_to_file, Edit/replace_file_content, Bash/run_command).\n"
             f"Do not ask conversational questions or request file contents when tools are available to read files from disk.\n"
             f"--------------------------------------\n"
@@ -360,6 +398,8 @@ class MahbubProvider(BaseProvider):
         #    Claude Code client never receives an incomplete stream.
         target_message_delta_received = False
         target_message_stop_received = False
+        # Instantiate a stray-tag stripper for target model output forwarding
+        _target_stray_re = _FORWARD_STRAY_TAGS_RE
 
         try:
             async for sse_event_str in target_stream:
@@ -388,6 +428,9 @@ class MahbubProvider(BaseProvider):
                         or delta.get("thinking")
                         or ""
                     )
+                    # Strip stray XML tags from text deltas before forwarding
+                    if delta_type == "text_delta" and content:
+                        content = _target_stray_re.sub("", content)
                     yield ledger.content_block_delta(idx, delta_type, content)
 
                 elif event_type == "content_block_stop":
