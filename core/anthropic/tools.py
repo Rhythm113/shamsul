@@ -157,7 +157,7 @@ class HeuristicToolParser:
         r"(?is)\b(?:use\s+)?(?P<tool>WebFetch|WebSearch)\b.*?(?P<json>\{.*?\})"
     )
     _STRAY_TAGS_RE = re.compile(
-        r"(</?(?:parameter|param|function|file_path|path|content|code|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern)(?:=[^>]*)?>|●?\s*<function=[^>]*>|●?\s*<parameter=[^>]*>)",
+        r"(</?(?:parameter|param|function|file_path|path|content|code|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern|argument_context|argument|arguments|context)(?:=[^>]*)?>|●?\s*<function=[^>]*>|●?\s*<parameter=[^>]*>)",
         re.IGNORECASE,
     )
 

@@ -26,7 +26,7 @@ _FORWARD_STRAY_TAGS_RE = re.compile(
     r"(</?(?:parameter|param|function|file_path|path|content|code|TargetFile|"
     r"Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|"
     r"AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|"
-    r"IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern)"
+    r"IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern|argument_context|argument|arguments|context)"
     r"(?:=[^>]*)?>|●?\s*<function=[^>]*>|●?\s*<parameter=[^>]*>)",
     re.IGNORECASE,
 )
@@ -366,8 +366,24 @@ class MahbubProvider(BaseProvider):
             if m_dict.get("role") == "user":
                 content = m_dict.get("content")
                 if isinstance(content, str):
+                    if content.startswith("[Tool Result:") or content.startswith(
+                        "[Compressed result:"
+                    ):
+                        continue
                     last_user_request = content[:500]
                 elif isinstance(content, list):
+                    has_tool_result = any(
+                        (
+                            b.get("type")
+                            if isinstance(b, dict)
+                            else getattr(b, "type", None)
+                        )
+                        == "tool_result"
+                        for b in content
+                    )
+                    if has_tool_result:
+                        continue
+
                     for block in content:
                         b_type = (
                             block.get("type")
@@ -380,7 +396,7 @@ class MahbubProvider(BaseProvider):
                                 if isinstance(block, dict)
                                 else getattr(block, "text", "")
                             )
-                            if txt:
+                            if txt and not txt.startswith("[Tool Result:"):
                                 last_user_request = str(txt)[:500]
                                 break
                 if last_user_request:
