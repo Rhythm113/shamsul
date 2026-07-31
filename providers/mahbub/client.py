@@ -362,23 +362,29 @@ class MahbubProvider(BaseProvider):
         # Extract the user's last request text so the delegate never forgets what was asked.
         last_user_request = ""
         for msg in reversed(request.messages):
-            role = (
-                msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
-            )
-            if role == "user":
-                content = (
-                    msg.get("content")
-                    if isinstance(msg, dict)
-                    else getattr(msg, "content", None)
-                )
+            m_dict = _message_to_dict(msg)
+            if m_dict.get("role") == "user":
+                content = m_dict.get("content")
                 if isinstance(content, str):
                     last_user_request = content[:500]
                 elif isinstance(content, list):
                     for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            last_user_request = block.get("text", "")[:500]
-                            break
-                break
+                        b_type = (
+                            block.get("type")
+                            if isinstance(block, dict)
+                            else getattr(block, "type", None)
+                        )
+                        if b_type == "text":
+                            txt = (
+                                block.get("text", "")
+                                if isinstance(block, dict)
+                                else getattr(block, "text", "")
+                            )
+                            if txt:
+                                last_user_request = str(txt)[:500]
+                                break
+                if last_user_request:
+                    break
 
         # Prepend clean execution guidance and bridge delegation marker
         task_line = (
