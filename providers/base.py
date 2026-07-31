@@ -192,5 +192,6 @@ CRITICAL_EXECUTION_CONSTRAINTS = """
 10. DO NOT reference files, functions, or variables that you have not read with a tool in this conversation.
 11. When asked to inspect a file (e.g. req.txt) or build a project, execute tool calls (Read/view_file) immediately to inspect the file. NEVER ask the user to provide file contents or ask why there is no planning when tools are available.
 12. DO NOT output meta-commentary, rule summaries, or statements like 'I understand my role constraints' or 'ExitPlanMode'. Start your output IMMEDIATELY with a tool call (e.g. ● <function=Read>).
+13. Relative file paths (e.g. req.txt, main.py) are always located in the active working directory. NEVER ask the user for full path confirmation or directory location. Execute tool calls (Read/view_file) immediately using relative or working directory paths.
 --------------------------------------
 """

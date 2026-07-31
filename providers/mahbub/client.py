@@ -389,9 +389,10 @@ class MahbubProvider(BaseProvider):
         guidance_header = (
             f"\n\n--- BRIDGE DELEGATION ACTIVE ---\n"
             f"Execution Role: {target.upper()} EXECUTOR.\n"
+            f"Active Working Directory: {working_dir}\n"
             f"{task_line}"
-            f"DIRECTIVE: Execute the task directly using real tool calls (Read/view_file, Write/write_to_file, Edit/replace_file_content, Bash/run_command).\n"
-            f"Do not ask conversational questions or request file contents when tools are available to read files from disk.\n"
+            f"DIRECTIVE: File names like 'req.txt' are located in {working_dir}. Execute Read/view_file tool call on 'req.txt' or '{working_dir}/req.txt' IMMEDIATELY.\n"
+            f"NEVER ask the user to confirm file paths or directory locations. Execute tools directly.\n"
             f"--------------------------------------\n"
             f"{CRITICAL_EXECUTION_CONSTRAINTS}"
         )
