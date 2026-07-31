@@ -106,14 +106,33 @@ def normalize_tool_parameters(
     return res
 
 
+def infer_tool_name_from_params(
+    params: dict[str, Any], allowed: set[str] | None = None
+) -> str:
+    """Infer tool function name when a model emits parameter tags without <function=>."""
+    if any(
+        k in params for k in ("code", "CodeContent", "content", "ReplacementContent")
+    ):
+        candidate = "Write"
+    elif any(k in params for k in ("command", "CommandLine", "cmd")):
+        candidate = "Bash"
+    elif any(k in params for k in ("pattern", "query", "SearchQuery")):
+        candidate = "Grep"
+    else:
+        candidate = "Read"
+
+    resolved = resolve_tool_name(candidate, allowed)
+    return resolved or candidate
+
+
 def is_potential_tool_call_start(buf: str) -> bool:
-    stripped = buf.lstrip("●").lstrip()
+    stripped = buf.lstrip("●•*- \t\r\n").lstrip()
     if not stripped:
         return True
 
-    target = "<function="
-    if target.startswith(stripped) or stripped.startswith(target):
-        return True
+    for target in ("<function=", "<parameter="):
+        if target.startswith(stripped.lower()) or stripped.lower().startswith(target):
+            return True
 
     return bool(re.match(r"^\w+\(?$", stripped))
 
@@ -438,12 +457,10 @@ class HeuristicToolParser:
         while True:
             if self._state == ParserState.TEXT:
                 idx = -1
-                if "●" in self._buffer:
-                    idx = self._buffer.find("●")
-                elif "<function=" in self._buffer.lower():
-                    idx = self._buffer.lower().find("<function=")
-                elif "<function:" in self._buffer.lower():
-                    idx = self._buffer.lower().find("<function:")
+                for marker in ("●", "•", "<function=", "<function:"):
+                    m_idx = self._buffer.lower().find(marker.lower())
+                    if m_idx != -1 and (idx == -1 or m_idx < idx):
+                        idx = m_idx
 
                 if idx != -1:
                     filtered_output_parts.append(self._buffer[:idx])
@@ -482,6 +499,14 @@ class HeuristicToolParser:
                         "Heuristic bypass: Detected start of tool call '{}'",
                         self._current_function_name,
                     )
+                elif "<parameter=" in self._buffer.lower():
+                    # Direct parameter tags without <function=> wrapper
+                    self._current_function_name = None
+                    self._current_tool_id = f"toolu_heuristic_{uuid.uuid4().hex[:8]}"
+                    self._current_parameters = {}
+                    param_pos = self._buffer.lower().find("<parameter=")
+                    self._buffer = self._buffer[param_pos:]
+                    self._state = ParserState.PARSING_PARAMETERS
                 elif (
                     not is_potential_tool_call_start(self._buffer)
                     or len(self._buffer) > 100
@@ -514,8 +539,12 @@ class HeuristicToolParser:
                             continue
                     break
 
-                if "●" in self._buffer:
-                    idx = self._buffer.find("●")
+                if "●" in self._buffer or "•" in self._buffer:
+                    idx = (
+                        self._buffer.find("●")
+                        if "●" in self._buffer
+                        else self._buffer.find("•")
+                    )
                     if idx > 0:
                         filtered_output_parts.append(self._buffer[:idx])
                         self._buffer = self._buffer[idx:]
@@ -527,19 +556,32 @@ class HeuristicToolParser:
                         finished_tool_call = True
 
                 if finished_tool_call:
+                    func_name = (
+                        self._current_function_name
+                        or infer_tool_name_from_params(
+                            self._current_parameters, self.allowed_tool_names
+                        )
+                    )
+                    if (
+                        self.allowed_tool_names
+                        and func_name not in self.allowed_tool_names
+                    ):
+                        self._state = ParserState.TEXT
+                        continue
+
                     detected_tools.append(
                         {
                             "type": "tool_use",
                             "id": self._current_tool_id,
-                            "name": self._current_function_name,
+                            "name": func_name,
                             "input": normalize_tool_parameters(
-                                self._current_function_name, self._current_parameters
+                                func_name, self._current_parameters
                             ),
                         }
                     )
                     logger.debug(
                         "Heuristic bypass: Emitting tool call '{}' with {} params",
-                        self._current_function_name,
+                        func_name,
                         len(self._current_parameters),
                     )
                     self._state = ParserState.TEXT
@@ -568,16 +610,20 @@ class HeuristicToolParser:
                     val = val[: -(len(key) + 3)].strip()
                 self._current_parameters[key] = val
 
-            detected_tools.append(
-                {
-                    "type": "tool_use",
-                    "id": self._current_tool_id,
-                    "name": self._current_function_name,
-                    "input": normalize_tool_parameters(
-                        self._current_function_name, self._current_parameters
-                    ),
-                }
+            func_name = self._current_function_name or infer_tool_name_from_params(
+                self._current_parameters, self.allowed_tool_names
             )
+            if not self.allowed_tool_names or func_name in self.allowed_tool_names:
+                detected_tools.append(
+                    {
+                        "type": "tool_use",
+                        "id": self._current_tool_id,
+                        "name": func_name,
+                        "input": normalize_tool_parameters(
+                            func_name, self._current_parameters
+                        ),
+                    }
+                )
             self._state = ParserState.TEXT
             self._buffer = ""
 
