@@ -443,10 +443,48 @@
                 </div>
             </div>
 
-            <!-- Multi-Model Bridge Card -->
+            <!-- Multi-LLM Role Configuration Card (α-UMi Architecture) -->
             <div class="card col-12">
                 <div class="card-header">
-                    <h2 class="card-title">Shamsul Multi-Model Bridge Settings</h2>
+                    <h2 class="card-title">α-UMi Multi-LLM Role Configuration</h2>
+                    <span class="card-badge">Role Delegation</span>
+                </div>
+                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-bottom: 15px; line-height: 1.5;">
+                    Assign specialized local Ollama models to distinct reasoning roles: <b>Planner</b> (task rationale & routing), <b>Caller</b> (tool parameter payloads), and <b>Coder</b> (code writing & patching).
+                </p>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; width: 100%;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="planner-model">Planner Model</label>
+                        <select id="planner-model" required>
+                            <option value="" disabled selected>Loading installed models...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="caller-model">Caller Model</label>
+                        <select id="caller-model" required>
+                            <option value="" disabled selected>Loading installed models...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="coder-model">Coder Model</label>
+                        <select id="coder-model" required>
+                            <option value="" disabled selected>Loading installed models...</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="sequential-unload">VRAM Unload Strategy</label>
+                        <select id="sequential-unload">
+                            <option value="true">Option A: Sequential Unload (Conserve VRAM)</option>
+                            <option value="false">Option B: Keep All Loaded (Low Latency)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Multi-Model Bridge Execution Card -->
+            <div class="card col-12">
+                <div class="card-header">
+                    <h2 class="card-title">Multi-Model Bridge Model Mapping</h2>
                     <span class="card-badge">Orchestration</span>
                 </div>
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; width: 100%;">
@@ -588,12 +626,18 @@
                 const bhSelect = document.getElementById('bridge-head-model');
                 const bcSelect = document.getElementById('bridge-coding-model');
                 const btSelect = document.getElementById('bridge-tooling-model');
+                const pSelect = document.getElementById('planner-model');
+                const caSelect = document.getElementById('caller-model');
+                const coSelect = document.getElementById('coder-model');
                 
                 rSelect.innerHTML = '';
                 cSelect.innerHTML = '';
                 bhSelect.innerHTML = '';
                 bcSelect.innerHTML = '';
                 btSelect.innerHTML = '';
+                if (pSelect) pSelect.innerHTML = '';
+                if (caSelect) caSelect.innerHTML = '';
+                if (coSelect) coSelect.innerHTML = '';
                 
                 if (models.length === 0) {
                     const noOption = '<option value="" disabled>No installed models found in Ollama. Make sure Ollama is running.</option>';
@@ -602,12 +646,18 @@
                     bhSelect.innerHTML = noOption;
                     bcSelect.innerHTML = noOption;
                     btSelect.innerHTML = noOption;
+                    if (pSelect) pSelect.innerHTML = noOption;
+                    if (caSelect) caSelect.innerHTML = noOption;
+                    if (coSelect) coSelect.innerHTML = noOption;
                     return;
                 }
                 
                 models.forEach(model => {
                     rSelect.insertAdjacentHTML('beforeend', `<option value="${model}">${model}</option>`);
                     cSelect.insertAdjacentHTML('beforeend', `<option value="${model}">${model}</option>`);
+                    if (pSelect) pSelect.insertAdjacentHTML('beforeend', `<option value="${model}">${model}</option>`);
+                    if (caSelect) caSelect.insertAdjacentHTML('beforeend', `<option value="${model}">${model}</option>`);
+                    if (coSelect) coSelect.insertAdjacentHTML('beforeend', `<option value="${model}">${model}</option>`);
                     
                     const fullModel = `ollama/${model}`;
                     bhSelect.insertAdjacentHTML('beforeend', `<option value="${fullModel}">${fullModel}</option>`);
@@ -682,6 +732,42 @@
 
                 activeReasoningPrompt = config.ollama_reasoning_system_prompt || DEFAULT_PROMPT;
 
+                // Load multi-role config
+                try {
+                    const roleResponse = await fetch('/api/config/roles');
+                    if (roleResponse.ok) {
+                        const roleConfig = await roleResponse.json();
+                        const pSelect = document.getElementById('planner-model');
+                        const caSelect = document.getElementById('caller-model');
+                        const coSelect = document.getElementById('coder-model');
+                        const seqSelect = document.getElementById('sequential-unload');
+                        
+                        if (pSelect && roleConfig.planner_model) {
+                            if (![...pSelect.options].some(o => o.value === roleConfig.planner_model)) {
+                                pSelect.insertAdjacentHTML('beforeend', `<option value="${roleConfig.planner_model}">${roleConfig.planner_model} (configured)</option>`);
+                            }
+                            pSelect.value = roleConfig.planner_model;
+                        }
+                        if (caSelect && roleConfig.caller_model) {
+                            if (![...caSelect.options].some(o => o.value === roleConfig.caller_model)) {
+                                caSelect.insertAdjacentHTML('beforeend', `<option value="${roleConfig.caller_model}">${roleConfig.caller_model} (configured)</option>`);
+                            }
+                            caSelect.value = roleConfig.caller_model;
+                        }
+                        if (coSelect && roleConfig.coder_model) {
+                            if (![...coSelect.options].some(o => o.value === roleConfig.coder_model)) {
+                                coSelect.insertAdjacentHTML('beforeend', `<option value="${roleConfig.coder_model}">${roleConfig.coder_model} (configured)</option>`);
+                            }
+                            coSelect.value = roleConfig.coder_model;
+                        }
+                        if (seqSelect && roleConfig.sequential_unload !== undefined) {
+                            seqSelect.value = roleConfig.sequential_unload.toString();
+                        }
+                    }
+                } catch (rErr) {
+                    console.warn('Could not load role config:', rErr);
+                }
+
                 // Load instructions.md
                 const instructionsResponse = await fetch('/api/bridge/instructions');
                 const instructionsData = await instructionsResponse.json();
@@ -718,6 +804,13 @@
                 context_max_tokens_coding: parseInt(document.getElementById('context-max-tokens-coding').value, 10),
                 context_max_tokens_tooling: parseInt(document.getElementById('context-max-tokens-tooling').value, 10)
             };
+
+            const rolePayload = {
+                planner_model: document.getElementById('planner-model') ? document.getElementById('planner-model').value : null,
+                caller_model: document.getElementById('caller-model') ? document.getElementById('caller-model').value : null,
+                coder_model: document.getElementById('coder-model') ? document.getElementById('coder-model').value : null,
+                sequential_unload: document.getElementById('sequential-unload') ? document.getElementById('sequential-unload').value === 'true' : true
+            };
             
             try {
                 const response = await fetch('/api/config', {
@@ -726,6 +819,12 @@
                     body: JSON.stringify(payload)
                 });
                 
+                const responseRoles = await fetch('/api/config/roles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(rolePayload)
+                });
+
                 const instrPayload = {
                     instructions: document.getElementById('bridge-instructions').value
                 };
@@ -735,7 +834,7 @@
                     body: JSON.stringify(instrPayload)
                 });
 
-                if (response.ok && responseInstr.ok) {
+                if (response.ok && responseRoles.ok && responseInstr.ok) {
                     showToast('Configuration successfully saved and reloaded!');
                 } else {
                     showToast('Failed to save configuration.', 'error');

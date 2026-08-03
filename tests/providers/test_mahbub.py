@@ -6,7 +6,7 @@ import pytest
 
 from config.settings import Settings
 from providers.base import ProviderConfig
-from providers.mahbub.client import MahbubProvider, TagStrippingParser, parse_sse_line
+from providers.mahbub.client import LeaderOutputParser, MahbubProvider, parse_sse_line
 
 
 class MockMessage:
@@ -33,27 +33,44 @@ class MockRequest:
         )
 
 
-def test_tag_stripping_parser_with_thinking_and_delegate():
-    """Test extracting tags and content using TagStrippingParser."""
-    parser = TagStrippingParser()
+def test_leader_output_parser_with_thinking_and_delegate():
+    """Test extracting tags and content using LeaderOutputParser."""
+    parser = LeaderOutputParser()
 
     # Chunk 1: regular thinking
-    think, delegate, other = parser.feed("Some text <thinking>my thoughts")
+    think, other = parser.feed("Some text <thinking>my thoughts")
     assert think == "my thoughts"
-    assert delegate == ""
     assert other == "Some text "
 
     # Chunk 2: close thinking and open delegate
-    think, delegate, other = parser.feed(" are here</thinking> and <delegate>coding")
+    think, other = parser.feed(" are here</thinking> and <delegate>coding")
     assert think == " are here"
-    assert delegate == "coding"
     assert other == " and "
 
     # Chunk 3: close delegate and trailing text
-    think, delegate, other = parser.feed("</delegate> done.")
+    think, other = parser.feed("</delegate> done.")
     assert think == ""
-    assert delegate == ""
     assert other == " done."
+    assert parser.delegate_target == "coding"
+
+
+def test_leader_output_parser_structured_tags():
+    """Test extraction of <plan>, <memory>, <context> structured tags."""
+    parser = LeaderOutputParser()
+
+    text = (
+        "<plan>1. Read file\n2. Create module</plan>"
+        '<memory key="project_type">Python CLI</memory>'
+        "<context>main.py, utils.py</context>"
+        "<delegate>coding</delegate>"
+    )
+    _think, _other = parser.feed(text)
+    parser.finalize()
+
+    assert parser.plan == "1. Read file\n2. Create module"
+    assert parser.memories == {"project_type": "Python CLI"}
+    assert parser.context_files == ["main.py", "utils.py"]
+    assert parser.delegate_target == "coding"
 
 
 def test_append_system_prompt():
@@ -318,3 +335,61 @@ async def test_mahbub_provider_missing_message_close():
     # The provider should have emitted close-out events
     assert "event: message_delta" in full_output
     assert "event: message_stop" in full_output
+
+
+def test_collect_context_file_refs_from_context_and_text():
+    """Context-file collection honors <context> tags and falls back to text refs."""
+    from providers.mahbub.client import _collect_context_file_refs
+
+    refs = _collect_context_file_refs(
+        ["req.txt", "main.py"],
+        "Step 1: Read req.txt\nStep 2: bump version 3.14",
+        "build the project from req.txt",
+    )
+    assert "req.txt" in refs
+    assert "main.py" in refs
+    # Numeric-looking tokens like "3.14" are not treated as files.
+    assert not any(ref == "3.14" or ref.endswith("3.14") for ref in refs)
+
+
+def test_collect_context_file_refs_skips_non_files():
+    """Tool names, URLs, and glob patterns are not treated as file references."""
+    from providers.mahbub.client import _collect_context_file_refs
+
+    refs = _collect_context_file_refs(
+        ["view_file", "http://example.com/a.html", "*.py", "real.txt"]
+    )
+    assert refs == ["real.txt"]
+
+
+def test_read_context_files_inlines_existing_and_notes_missing(tmp_path):
+    """Existing text files are inlined; missing files are reported as absent."""
+    from providers.mahbub.client import _read_context_files
+
+    req = tmp_path / "req.txt"
+    req.write_text("build a CLI app", encoding="utf-8")
+    block = _read_context_files(str(tmp_path), ["req.txt", "missing.txt"])
+    assert "--- req.txt ---" in block
+    assert "build a CLI app" in block
+    assert "missing.txt (NOT FOUND" in block
+
+
+def test_read_context_files_skips_binary_and_globs(tmp_path):
+    """Non-text extensions and glob patterns are skipped, not inlined."""
+    from providers.mahbub.client import _read_context_files
+
+    (tmp_path / "data.bin").write_bytes(b"\x00\x01\x02")
+    block = _read_context_files(str(tmp_path), ["*.py", "data.bin"])
+    assert "binary" in block
+    assert "*.py" not in block
+
+
+def test_read_context_files_lists_directories(tmp_path):
+    """A directory reference is summarized with its entries, not inlined."""
+    from providers.mahbub.client import _read_context_files
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("x", encoding="utf-8")
+    block = _read_context_files(str(tmp_path), ["src"])
+    assert "(directory)" in block
+    assert "main.py" in block

@@ -23,6 +23,26 @@ class ReasoningReplayMode(StrEnum):
     DISABLED = "disabled"
     THINK_TAGS = "think_tags"
     REASONING_CONTENT = "reasoning_content"
+    REASONING = "reasoning"
+
+
+def _reasoning_replay_field(mode: ReasoningReplayMode) -> str | None:
+    """Return the top-level message field name for reasoning replay, or None."""
+    if mode in (
+        ReasoningReplayMode.REASONING_CONTENT,
+        ReasoningReplayMode.REASONING,
+    ):
+        return mode.value
+    return None
+
+
+def _set_replayed_reasoning(
+    message: dict[str, Any], reasoning: str, mode: ReasoningReplayMode
+) -> None:
+    """Inject replayed reasoning into an OpenAI message dict."""
+    field_name = _reasoning_replay_field(mode)
+    if field_name is not None:
+        message[field_name] = reasoning
 
 
 def _openai_reject_native_only_top_level_fields(request_data: Any) -> None:

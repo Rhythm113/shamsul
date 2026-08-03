@@ -16,6 +16,22 @@ def test_think_tag_parser_basic():
     assert chunks[2].content == " world"
 
 
+def test_strip_stray_tags_structured_and_orphan_tags():
+    from core.anthropic.tools import strip_stray_tags
+
+    # Test orphan parameter tags
+    text = "</parameter>\n</parameter>\n</parameter>"
+    assert strip_stray_tags(text) == ""
+
+    # Test mixed text with orphan tags
+    text2 = "Some text </parameter> with stray tags </plan>"
+    assert strip_stray_tags(text2) == "Some text  with stray tags "
+
+    # Test structured leader tags
+    text3 = '<plan>1. Do X</plan><memory key="k">v</memory><delegate>coding</delegate>'
+    assert strip_stray_tags(text3) == "1. Do Xvcoding"
+
+
 def test_think_tag_parser_streaming():
     parser = ThinkTagParser()
 
@@ -55,12 +71,17 @@ def test_heuristic_tool_parser_streaming():
     _filtered2, tools2 = parser.feed("<parameter=path>test.txt</parameter>")
     assert tools2 == []
 
-    # Feed part 3 (triggering flush or completion)
-    filtered3, tools3 = parser.feed("\nDone.")
+    # Feed part 3 (completing the Write; path is normalized to file_path)
+    filtered3, tools3 = parser.feed("<parameter=content>my content</parameter>")
+    tools3 += parser.flush()
+
     assert len(tools3) == 1
     assert tools3[0]["name"] == "Write"
-    assert tools3[0]["input"] == {"path": "test.txt"}
-    assert "Done." in filtered3
+    assert tools3[0]["input"] == {
+        "file_path": "test.txt",
+        "content": "my content",
+    }
+    assert filtered3.strip() == ""
 
 
 def test_heuristic_tool_parser_flush():
@@ -162,7 +183,7 @@ def test_partial_interleaved_streaming():
 
     assert len(tools3) == 1
     assert tools3[0]["name"] == "Read"
-    assert tools3[0]["input"] == {"path": "test.py"}
+    assert tools3[0]["input"] == {"file_path": "test.py"}
 
 
 # --- New Robustness Tests ---
@@ -584,7 +605,7 @@ def test_heuristic_tool_parser_python_style_calls():
     assert tools[0]["name"] == "Write"
     assert tools[0]["input"] == {
         "file_path": "D:\\test\\index.html",
-        "code": "my content",
+        "content": "my content",
     }
     assert filtered.strip() == ""
 
@@ -661,3 +682,165 @@ def test_heuristic_tool_parser_namespaced_allowed_tools():
     assert len(tools) == 1
     assert tools[0]["name"] == "default_api:write_to_file"
     assert tools[0]["input"] == {"file_path": "index.html", "code": "content"}
+
+
+# --- Name-aware normalization + completeness guards ---
+
+
+def test_normalize_write_content_canonical():
+    """Claude Code Write requires ``content``; code/text aliases map to it."""
+    from core.anthropic.tools import normalize_tool_parameters
+
+    assert normalize_tool_parameters("Write", {"file_path": "a.txt", "code": "x"}) == {
+        "file_path": "a.txt",
+        "content": "x",
+    }
+    assert normalize_tool_parameters("Write", {"path": "a.txt", "text": "y"}) == {
+        "file_path": "a.txt",
+        "content": "y",
+    }
+    # Content already present wins over aliases.
+    assert normalize_tool_parameters(
+        "Write", {"file_path": "a.txt", "content": "keep", "code": "drop"}
+    ) == {"file_path": "a.txt", "content": "keep"}
+
+
+def test_normalize_write_to_file_keeps_code():
+    """Codex/Cline ``write_to_file`` uses ``code`` as the content key."""
+    from core.anthropic.tools import normalize_tool_parameters
+
+    assert normalize_tool_parameters(
+        "write_to_file", {"file_path": "a.txt", "code": "x"}
+    ) == {"file_path": "a.txt", "code": "x"}
+    # Namespaced tool names are normalized the same way.
+    assert normalize_tool_parameters(
+        "default_api:write_to_file", {"path": "a.txt", "content": "x"}
+    ) == {"file_path": "a.txt", "code": "x"}
+
+
+def test_normalize_edit_and_shell_and_grep():
+    """Edit splits into old_string/new_string; Bash/Grep map their aliases."""
+    from core.anthropic.tools import normalize_tool_parameters
+
+    assert normalize_tool_parameters(
+        "Edit", {"path": "a.py", "ReplacementContent": "new", "SearchContent": "old"}
+    ) == {"file_path": "a.py", "new_string": "new", "old_string": "old"}
+    assert normalize_tool_parameters("Bash", {"CommandLine": "ls -la"}) == {
+        "command": "ls -la"
+    }
+    assert normalize_tool_parameters("Grep", {"query": "hello"}) == {"pattern": "hello"}
+
+
+def test_is_complete_tool_call_guards():
+    """Write/Edit calls missing required params are not emitted."""
+    from core.anthropic.tools import is_complete_tool_call
+
+    assert is_complete_tool_call("Write", {"file_path": "a.txt", "content": "x"})
+    assert is_complete_tool_call("Write", {"path": "a.txt", "code": "x"})
+    assert not is_complete_tool_call("Write", {"file_path": "a.txt"})
+    assert not is_complete_tool_call("write_to_file", {"code": "x"})
+    # Edit needs a file path and some new content; old_string alone is not enough.
+    assert is_complete_tool_call("Edit", {"file_path": "a.py", "new_string": "n"})
+    assert is_complete_tool_call("Edit", {"file_path": "a.py", "code": "n"})
+    assert not is_complete_tool_call("Edit", {"file_path": "a.py", "old_string": "o"})
+    assert is_complete_tool_call("Bash", {"command": "ls"})
+
+
+def test_write_missing_content_not_emitted_python_style():
+    """A Python-style Write with a path but no content is dropped as text."""
+    parser = HeuristicToolParser()
+    text = '● Write(file_path="D:\\x\\req.txt")'
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 0
+    assert "Write" in filtered
+
+
+def test_write_missing_content_not_emitted_xml_style():
+    """A XML-style Write with a path but no content is never emitted."""
+    parser = HeuristicToolParser()
+    text = "● <function=Write><parameter=file_path>D:\\x\\req.txt</parameter>"
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 0
+    assert filtered.strip() == ""
+
+
+def test_unterminated_content_then_next_tool():
+    """A Write whose content tag is never closed before the next tool marker.
+
+    Previously the Write was emitted with only the file path (dropping the
+    content), producing "Error writing file"; now the content survives up to the
+    next tool marker and both tools are emitted.
+    """
+    parser = HeuristicToolParser()
+    text = (
+        "● <function=Write>"
+        "<parameter=file_path>D:/x/req.txt</parameter>"
+        "<parameter=content>line1\n"
+        "● <function=Grep><parameter=pattern>hi</parameter>"
+    )
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 2
+    assert tools[0]["name"] == "Write"
+    assert tools[0]["input"] == {
+        "file_path": "D:/x/req.txt",
+        "content": "line1",
+    }
+    assert tools[1]["name"] == "Grep"
+    assert tools[1]["input"] == {"pattern": "hi"}
+    assert filtered.strip() == ""
+
+
+def test_unterminated_content_flushed_at_eof():
+    """Trailing unterminated content is committed at flush, not dropped."""
+    parser = HeuristicToolParser()
+    text = (
+        "● <function=Write>"
+        "<parameter=file_path>D:/x/out.py</parameter>"
+        "<parameter=content>print('hi')"
+    )
+    _, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "Write"
+    assert tools[0]["input"] == {
+        "file_path": "D:/x/out.py",
+        "content": "print('hi')",
+    }
+
+
+def test_bullet_inside_terminated_content_preserved():
+    """A bullet inside a properly-closed parameter is content, not a boundary."""
+    parser = HeuristicToolParser()
+    text = (
+        "● <function=Write>"
+        "<parameter=file_path>D:/x/doc.md</parameter>"
+        "<parameter=content>line1 ● line2</parameter>"
+    )
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "Write"
+    assert tools[0]["input"]["content"] == "line1 ● line2"
+    assert filtered.strip() == ""
+
+
+def test_bare_parameter_tool_call_parsed():
+    """Bare parameter tag without <function=> (e.g. <parameter=file_path>...) is parsed into a tool call."""
+    allowed = {"view_file", "write_to_file"}
+    parser = HeuristicToolParser(allowed_tool_names=allowed)
+    text = "<parameter=file_path>D:/NSU/cse327/test/req.txt</parameter>"
+    filtered, tools = parser.feed(text)
+    tools.extend(parser.flush())
+
+    assert len(tools) == 1
+    assert tools[0]["name"] == "view_file"
+    assert tools[0]["input"] == {"file_path": "D:/NSU/cse327/test/req.txt"}
+    assert filtered.strip() == ""

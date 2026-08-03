@@ -212,3 +212,13 @@ def provider_native_messages_body_snapshot(body: Mapping[str, Any]) -> dict[str,
     )
     snap = {k: body[k] for k in keys if k in body and body[k] is not None}
     return _sanitize_trace_value(snap)
+
+
+async def close_stream_input(aiter: Any, **kwargs: Any) -> None:
+    """Best-effort close of an async iterator."""
+    import contextlib
+
+    aclose = getattr(aiter, "aclose", None)
+    if aclose is not None:
+        with contextlib.suppress(Exception):
+            await aclose()

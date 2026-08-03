@@ -390,14 +390,17 @@ def extract_working_directory(system_prompt: Any, messages: list) -> str | None:
     patterns = [
         r"current directory\s*(?:is|:)?\s*[\"']?([a-zA-Z]:[\\/][^\"'\n\r]+|/[^\"'\n\r]+)[\"']?",
         r"working directory\s*(?:is|:)?\s*[\"']?([a-zA-Z]:[\\/][^\"'\n\r]+|/[^\"'\n\r]+)[\"']?",
-        r"directory:\s*[\"']?([a-zA-Z]:[\\/][^\"'\n\r]+|/[^\"'\n\r]+)[\"']?",
+        r"(?:workdir|workspace|cwd|root|directory)\s*(?:is|:|=)?\s*[\"']?([a-zA-Z]:[\\/][^\"'\n\r<>]+|/[^\"'\n\r<>]+)[\"']?",
+        r"<(?:cwd|workdir|workspace|directory)>([^<]+)</(?:cwd|workdir|workspace|directory)>",
         r"run(?:ning)?\s*(?:in|from)\s*[\"']?([a-zA-Z]:[\\/][^\"'\n\r]+|/[^\"'\n\r]+)[\"']?",
     ]
     for pattern in patterns:
         match = re.search(pattern, text_to_search, re.IGNORECASE)
         if match:
             return match.group(1).strip().replace("\\", "/")
-    return None
+    import os
+
+    return os.getcwd().replace("\\", "/")
 
 
 def compress_system_prompt(system_prompt: Any) -> str:
@@ -427,7 +430,8 @@ def compress_system_prompt(system_prompt: Any) -> str:
 
     # Extract only actionable facts from the massive Claude system prompt.
     extracted: list[str] = [
-        "You are a helpful coding assistant. Follow tool calling instructions precisely."
+        "You are a helpful coding assistant. You can respond conversationally to greetings and questions.",
+        "When the user needs file or code operations, use tool calls. For simple questions, just answer directly in plain text.",
     ]
 
     # Pull platform info
@@ -525,7 +529,10 @@ def _format_tools_as_text(tools: list[dict], platform: str = "linux") -> str:
         f"● <function={shell_tool}>",
         f"<parameter=command>{cmd_example}</parameter>",
         "",
-        "IMPORTANT: You MUST format all tool calls this way. Never output raw JSON. If you do output raw JSON, it will fail to execute.",
+        "CRITICAL RULES:",
+        "- If the user asks a simple question, greets you, or asks for an explanation, just respond in plain text. Do NOT use any tool calls for conversational queries.",
+        "- Only use tool calls when you actually need to read files, write code, or run commands.",
+        "- When you DO need a tool, format it EXACTLY as shown above (with the bullet point). Never output raw JSON.",
         "",
         "Available tools:",
     ]
@@ -644,22 +651,35 @@ class OllamaProvider(OpenAIChatTransport):
 
             # Enforce coding token budget limit
             coding_budget = budget_manager.get_budget_for_role("coding")
-            compressed = compress_system_prompt(original_system)
             platform = detect_os_platform(original_system)
             file_map_summary = session_store.get_active_files_summary(
                 working_dir, max_chars=2000
             )
 
+            # When bridge delegation is active, the system prompt already
+            # contains the full task context, plan, constraints, and context
+            # files injected by MahbubProvider.  Compressing it would strip
+            # all of that, leaving the model without instructions.
+            is_bridge = "--- BRIDGE DELEGATION ACTIVE ---" in original_system
+            if is_bridge:
+                compressed = original_system
+            else:
+                compressed = compress_system_prompt(original_system)
+
             request_copy.messages = budget_manager.fit_messages_to_budget(
                 compressed_msgs, compressed, coding_budget
             )
             system_extra = f"\n{file_map_summary}" if file_map_summary else ""
-            request_copy.system = (
-                f"{compressed}\n"
-                f"Operating System Platform: {platform.upper()}\n"
-                f"{system_extra}\n"
-                f"{CRITICAL_EXECUTION_CONSTRAINTS}"
-            )
+            if is_bridge:
+                # Keep the delegation prompt intact; only append file map.
+                request_copy.system = f"{compressed}\n{system_extra}"
+            else:
+                request_copy.system = (
+                    f"{compressed}\n"
+                    f"Operating System Platform: {platform.upper()}\n"
+                    f"{system_extra}\n"
+                    f"{CRITICAL_EXECUTION_CONSTRAINTS}"
+                )
             body = build_base_request_body(
                 request_copy,
                 reasoning_replay=ReasoningReplayMode.DISABLED,
@@ -816,9 +836,12 @@ class OllamaProvider(OpenAIChatTransport):
                 {
                     "role": "system",
                     "content": (
-                        "You are the Head Reasoning Agent. Provide a concise 1-sentence "
-                        "action plan explaining which tool call (Read, Write, Edit, Bash) "
-                        "should be executed first to fulfill the user's request. "
+                        "You are the Head Reasoning Agent. "
+                        "If the user's message is a simple greeting, question about identity, "
+                        "or conversational query that does NOT require reading/writing files or "
+                        "running commands, respond with: DIRECT_RESPONSE - then a brief natural answer. "
+                        "Otherwise, provide a concise 1-sentence action plan explaining which tool "
+                        "(Read, Write, Edit, Bash) should be executed first. "
                         "DO NOT recite system constraints, role rules, or plan mode text."
                     ),
                 },

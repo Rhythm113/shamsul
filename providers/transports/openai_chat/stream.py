@@ -11,6 +11,7 @@ from core.anthropic import (
     ContentType,
     HeuristicToolParser,
     ThinkTagParser,
+    strip_stray_tags,
 )
 from core.anthropic.streaming import (
     AnthropicStreamLedger,
@@ -139,12 +140,16 @@ class OpenAIChatStreamAdapter:
 
                         reasoning = getattr(delta, "reasoning_content", None)
                         if thinking_enabled and reasoning:
-                            for event in hold_events(ledger.ensure_thinking_block()):
-                                yield event
-                            for event in hold_event(
-                                ledger.emit_thinking_delta(reasoning)
-                            ):
-                                yield event
+                            cleaned_reasoning = strip_stray_tags(reasoning)
+                            if cleaned_reasoning:
+                                for event in hold_events(
+                                    ledger.ensure_thinking_block()
+                                ):
+                                    yield event
+                                for event in hold_event(
+                                    ledger.emit_thinking_delta(cleaned_reasoning)
+                                ):
+                                    yield event
 
                         for event in self._transport._handle_extra_reasoning(
                             delta,

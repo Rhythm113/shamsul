@@ -25,7 +25,7 @@ from .streaming import (
 )
 from .thinking import ContentChunk, ContentType, ThinkTagParser
 from .tokens import get_token_count
-from .tools import HeuristicToolParser
+from .tools import HeuristicToolParser, strip_stray_tags
 from .utils import set_if_not_none
 
 __all__ = [
@@ -54,4 +54,5 @@ __all__ = [
     "sanitize_native_messages_thinking_policy",
     "serialize_tool_result_content",
     "set_if_not_none",
+    "strip_stray_tags",
 ]

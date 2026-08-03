@@ -1,15 +1,18 @@
 """Convert OpenAI Responses requests into Anthropic Messages payloads."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.trace import trace_event
 
 from .errors import ResponsesConversionError
+from .models import OpenAIResponsesRequest
 from .reasoning import (
     combine_reasoning,
+    encrypted_reasoning_from_item,
     reasoning_text_from_item,
-    responses_reasoning_to_thinking,
+    responses_reasoning_to_output_config,
 )
 from .tools import (
     call_id_from_item,
@@ -23,20 +26,41 @@ from .tools import (
 )
 
 
+@dataclass(slots=True)
+class _PendingReasoning:
+    text: str | None = None
+    encrypted: list[str] = field(default_factory=list)
+
+    def add_item(self, item: Mapping[str, Any]) -> None:
+        self.text = combine_reasoning(self.text, reasoning_text_from_item(item))
+        if encrypted := encrypted_reasoning_from_item(item):
+            self.encrypted.append(encrypted)
+
+    def take(self) -> tuple[str | None, list[dict[str, str]]]:
+        text = self.text
+        blocks = [
+            {"type": "redacted_thinking", "data": encrypted}
+            for encrypted in self.encrypted
+        ]
+        self.text = None
+        self.encrypted.clear()
+        return text, blocks
+
+
 def convert_request_to_anthropic_payload(
-    request: Mapping[str, Any],
+    request: OpenAIResponsesRequest,
 ) -> dict[str, Any]:
     """Convert an OpenAI Responses request into an Anthropic Messages payload."""
 
     system_parts: list[str] = []
-    if instructions := optional_str(request.get("instructions")):
+    if instructions := request.instructions:
         system_parts.append(instructions)
 
     messages: list[dict[str, Any]] = []
-    pending_reasoning: str | None = None
+    pending_reasoning = _PendingReasoning()
     quarantined_function_call_ids: set[str] = set()
-    for item in _iter_input_items(request.get("input")):
-        pending_reasoning = _append_input_item(
+    for item in _iter_input_items(request.input):
+        _append_input_item(
             item,
             messages=messages,
             system_parts=system_parts,
@@ -49,24 +73,31 @@ def convert_request_to_anthropic_payload(
         raise ResponsesConversionError("Responses request input must contain a message")
 
     payload: dict[str, Any] = {
-        "model": required_str(request.get("model"), "model"),
+        "model": required_str(request.model, "model"),
         "messages": messages,
         "stream": True,
     }
     if system_parts:
         payload["system"] = "\n\n".join(system_parts)
-    _copy_if_present(request, payload, "temperature")
-    _copy_if_present(request, payload, "top_p")
-    if request.get("max_output_tokens") is not None:
-        payload["max_tokens"] = request["max_output_tokens"]
-    if isinstance(request.get("metadata"), dict):
-        payload["metadata"] = request["metadata"]
+    if request.temperature is not None:
+        payload["temperature"] = request.temperature
+    if request.top_p is not None:
+        payload["top_p"] = request.top_p
+    if request.max_output_tokens is not None:
+        payload["max_tokens"] = request.max_output_tokens
+    if request.metadata is not None:
+        payload["metadata"] = request.metadata
 
-    if thinking := responses_reasoning_to_thinking(request.get("reasoning")):
-        payload["thinking"] = thinking
+    if output_config := responses_reasoning_to_output_config(request.reasoning):
+        payload["output_config"] = output_config
+        effort = output_config.get("effort")
+        if effort == "none":
+            payload["thinking"] = {"type": "disabled", "enabled": False}
+        elif effort:
+            payload["thinking"] = {"type": "enabled", "enabled": True}
 
-    raw_tool_choice = request.get("tool_choice")
-    tools = convert_tools(request.get("tools"))
+    raw_tool_choice = request.tool_choice
+    tools = convert_tools(request.tools)
     if tools and raw_tool_choice != "none":
         payload["tools"] = tools
     tool_choice = convert_tool_choice(raw_tool_choice)
@@ -81,13 +112,13 @@ def _append_input_item(
     *,
     messages: list[dict[str, Any]],
     system_parts: list[str],
-    pending_reasoning: str | None,
+    pending_reasoning: _PendingReasoning,
     quarantined_function_call_ids: set[str],
-) -> str | None:
+) -> None:
     if isinstance(item, str):
         _append_pending_reasoning(messages, pending_reasoning)
         messages.append({"role": "user", "content": item})
-        return None
+        return
     if not isinstance(item, dict):
         raise ResponsesConversionError(
             f"Unsupported Responses input item: {type(item).__name__}"
@@ -104,10 +135,10 @@ def _append_input_item(
                 system_parts,
                 reasoning_content=pending_reasoning,
             )
-            return None
+            return
         _append_pending_reasoning(messages, pending_reasoning)
         _append_message_item(role, item.get("content", ""), messages, system_parts)
-        return None
+        return
     if item_type in {"function_call", "custom_tool_call"}:
         namespace = optional_str(item.get("namespace"))
         field_name = f"{item_type}.name"
@@ -121,51 +152,43 @@ def _append_input_item(
             except ResponsesConversionError as exc:
                 quarantined_function_call_ids.add(call_id)
                 _trace_quarantined_function_call(call_id, exc)
-                return pending_reasoning
-        message = {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": call_id,
-                    "name": responses_tool_name_to_anthropic_name(
-                        name, namespace=namespace
-                    ),
-                    "input": tool_input,
-                }
-            ],
+                return
+        tool_use = {
+            "type": "tool_use",
+            "id": call_id,
+            "name": responses_tool_name_to_anthropic_name(name, namespace=namespace),
+            "input": tool_input,
         }
-        if pending_reasoning:
-            message["reasoning_content"] = pending_reasoning
-        messages.append(message)
-        return None
+        _append_tool_use_message(
+            messages,
+            tool_use,
+            reasoning_content=pending_reasoning,
+        )
+        return
     if item_type in {"function_call_output", "custom_tool_call_output"}:
         call_id = call_id_from_item(item)
         if (
             item_type == "function_call_output"
             and call_id in quarantined_function_call_ids
         ):
-            return pending_reasoning
-        _append_pending_reasoning(messages, pending_reasoning)
-        messages.append(
+            return
+        _append_pending_reasoning_before_tool_output(messages, pending_reasoning)
+        _append_tool_result_message(
+            messages,
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": call_id,
-                        "content": item.get("output", ""),
-                    }
-                ],
-            }
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": item.get("output", ""),
+            },
         )
-        return None
+        return
     if item_type == "reasoning":
-        return combine_reasoning(pending_reasoning, reasoning_text_from_item(item))
+        pending_reasoning.add_item(item)
+        return
     if item_type in {"input_text", "output_text", "text"}:
         _append_pending_reasoning(messages, pending_reasoning)
         messages.append({"role": "user", "content": _text_from_part(item)})
-        return None
+        return
 
     raise ResponsesConversionError(
         f"Unsupported Responses input item type: {item_type!r}"
@@ -190,7 +213,7 @@ def _append_message_item(
     messages: list[dict[str, Any]],
     system_parts: list[str],
     *,
-    reasoning_content: str | None = None,
+    reasoning_content: _PendingReasoning | None = None,
 ) -> None:
     normalized_role = "system" if role == "developer" else role
     if normalized_role == "system":
@@ -200,26 +223,145 @@ def _append_message_item(
         return
     if normalized_role not in {"user", "assistant"}:
         raise ResponsesConversionError(f"Unsupported Responses message role: {role!r}")
+    converted_content = _convert_message_content(content)
+    reasoning_text: str | None = None
+    reasoning_blocks: list[dict[str, str]] = []
+    if normalized_role == "assistant" and reasoning_content is not None:
+        reasoning_text, reasoning_blocks = reasoning_content.take()
+    if reasoning_blocks:
+        if isinstance(converted_content, str):
+            converted_blocks: list[dict[str, Any]] = list(reasoning_blocks)
+            if converted_content:
+                converted_blocks.append({"type": "text", "text": converted_content})
+            converted_content = converted_blocks
+        else:
+            converted_content = [*reasoning_blocks, *converted_content]
     message = {
         "role": normalized_role,
-        "content": _convert_message_content(content),
+        "content": converted_content,
     }
-    if normalized_role == "assistant" and reasoning_content:
-        message["reasoning_content"] = reasoning_content
+    if reasoning_text is not None:
+        message["reasoning_content"] = reasoning_text
     messages.append(message)
 
 
 def _append_pending_reasoning(
-    messages: list[dict[str, Any]], pending_reasoning: str | None
+    messages: list[dict[str, Any]], pending_reasoning: _PendingReasoning
 ) -> None:
-    if pending_reasoning:
-        messages.append(
-            {
-                "role": "assistant",
-                "content": "",
-                "reasoning_content": pending_reasoning,
-            }
-        )
+    reasoning_text, reasoning_blocks = pending_reasoning.take()
+    if reasoning_text is None and not reasoning_blocks:
+        return
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": reasoning_blocks or "",
+    }
+    if reasoning_text is not None:
+        message["reasoning_content"] = reasoning_text
+    messages.append(message)
+
+
+def _append_pending_reasoning_before_tool_output(
+    messages: list[dict[str, Any]], pending_reasoning: _PendingReasoning
+) -> None:
+    if pending_reasoning.text is None and not pending_reasoning.encrypted:
+        return
+    message = _last_assistant_tool_use_message(messages)
+    if message is None:
+        _append_pending_reasoning(messages, pending_reasoning)
+        return
+    reasoning_text, reasoning_blocks = pending_reasoning.take()
+    if reasoning_text is not None:
+        _merge_message_reasoning(message, reasoning_text)
+    _prepend_reasoning_blocks(message, reasoning_blocks)
+
+
+def _append_tool_use_message(
+    messages: list[dict[str, Any]],
+    tool_use: dict[str, Any],
+    *,
+    reasoning_content: _PendingReasoning,
+) -> None:
+    message = _last_assistant_tool_use_message(messages)
+    if message is None:
+        message = {"role": "assistant", "content": []}
+        messages.append(message)
+    reasoning_text, reasoning_blocks = reasoning_content.take()
+    if reasoning_text is not None:
+        _merge_message_reasoning(message, reasoning_text)
+    _prepend_reasoning_blocks(message, reasoning_blocks)
+    content = message["content"]
+    if isinstance(content, list):
+        content.append(tool_use)
+
+
+def _append_tool_result_message(
+    messages: list[dict[str, Any]],
+    tool_result: dict[str, Any],
+) -> None:
+    message = _last_user_tool_result_message(messages)
+    if message is None:
+        message = {"role": "user", "content": []}
+        messages.append(message)
+    content = message["content"]
+    if isinstance(content, list):
+        content.append(tool_result)
+
+
+def _last_assistant_tool_use_message(
+    messages: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not messages:
+        return None
+    message = messages[-1]
+    if message.get("role") != "assistant":
+        return None
+    content = message.get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    block_types = [
+        block.get("type") if isinstance(block, dict) else None for block in content
+    ]
+    if "tool_use" in block_types and all(
+        block_type in {"redacted_thinking", "thinking", "tool_use"}
+        for block_type in block_types
+    ):
+        return message
+    return None
+
+
+def _last_user_tool_result_message(
+    messages: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not messages:
+        return None
+    message = messages[-1]
+    if message.get("role") != "user":
+        return None
+    content = message.get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    if all(
+        isinstance(block, dict) and block.get("type") == "tool_result"
+        for block in content
+    ):
+        return message
+    return None
+
+
+def _merge_message_reasoning(message: dict[str, Any], reasoning: str) -> None:
+    existing = message.get("reasoning_content")
+    existing_reasoning = existing if isinstance(existing, str) else None
+    message["reasoning_content"] = combine_reasoning(existing_reasoning, reasoning)
+
+
+def _prepend_reasoning_blocks(
+    message: dict[str, Any], blocks: list[dict[str, str]]
+) -> None:
+    if not blocks:
+        return
+    content = message.get("content")
+    if isinstance(content, list):
+        content[:0] = blocks
 
 
 def _iter_input_items(value: Any) -> list[Any]:
@@ -276,10 +418,3 @@ def _text_from_part(part: Mapping[str, Any]) -> str:
     if text := optional_str(part.get("output_text")):
         return text
     return ""
-
-
-def _copy_if_present(
-    source: Mapping[str, Any], target: dict[str, Any], field_name: str
-) -> None:
-    if source.get(field_name) is not None:
-        target[field_name] = source[field_name]

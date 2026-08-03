@@ -354,6 +354,28 @@ def make_text_recovery_body(
     return recovery
 
 
+def make_response_recovery_body(
+    body: dict[str, Any],
+    partial_text: str,
+    partial_thinking: str = "",
+) -> dict[str, Any]:
+    """Build a continuation request for OpenAI Responses API streams."""
+    recovery = deepcopy(body)
+    recovery.pop("tools", None)
+    recovery.pop("tool_choice", None)
+    # Responses API uses 'input' instead of 'messages'
+    raw_inputs = recovery.get("input", [])
+    inputs = list(raw_inputs) if isinstance(raw_inputs, list) else []
+    if partial_text:
+        inputs.append({"role": "assistant", "content": partial_text})
+    prompt = _RECOVERY_USER_PREFIX
+    if partial_thinking:
+        prompt = f"{_RECOVERY_THINKING_PREFIX}{partial_thinking}\n\n{prompt}"
+    inputs.append({"role": "user", "content": prompt})
+    recovery["input"] = inputs
+    return recovery
+
+
 def make_tool_repair_body(
     body: dict[str, Any],
     *,

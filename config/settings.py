@@ -38,6 +38,22 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="OLLAMA_IMAGE_MODEL",
     )
+    ollama_planner_model: str = Field(
+        default="gemma2:9b",
+        validation_alias="OLLAMA_PLANNER_MODEL",
+    )
+    ollama_caller_model: str = Field(
+        default="qwen2.5-coder:7b",
+        validation_alias="OLLAMA_CALLER_MODEL",
+    )
+    ollama_coder_model: str = Field(
+        default="qwen2.5-coder:7b",
+        validation_alias="OLLAMA_CODER_MODEL",
+    )
+    ollama_sequential_unload: bool = Field(
+        default=True,
+        validation_alias="OLLAMA_SEQUENTIAL_UNLOAD",
+    )
 
     # ==================== Multi-Model Bridge Config ====================
     bridge_head_model: str = Field(
@@ -68,6 +84,13 @@ class Settings(BaseSettings):
         ),
         validation_alias="OLLAMA_REASONING_SYSTEM_PROMPT",
     )
+
+    # ==================== Agent (shamsul-agent CLI) ====================
+    # Executor loop budgets for the Plan-Execute-Replan agent. max_turns caps the
+    # number of executor API calls per turn; max_replans caps how many times the
+    # planner is re-consulted when the executor stalls mid-task.
+    agent_max_turns: int = Field(default=60, validation_alias="AGENT_MAX_TURNS")
+    agent_max_replans: int = Field(default=12, validation_alias="AGENT_MAX_REPLANS")
 
     # ==================== Context Compression ====================
     # Number of recent assistant/user exchange turns to keep uncompressed.

@@ -20,21 +20,31 @@ def reasoning_text_from_item(item: Mapping[str, Any]) -> str | None:
     return None
 
 
+def encrypted_reasoning_from_item(item: Mapping[str, Any]) -> str | None:
+    """Return opaque reasoning content without interpreting it."""
+
+    return optional_str(item.get("encrypted_content"))
+
+
 def combine_reasoning(existing: str | None, addition: str | None) -> str | None:
-    if not addition:
+    if addition is None:
         return existing
-    if not existing:
+    if existing is None:
         return addition
+    if existing == "":
+        return addition
+    if addition == "":
+        return existing
     return f"{existing}\n{addition}"
 
 
-def responses_reasoning_to_thinking(value: Any) -> dict[str, Any] | None:
+def responses_reasoning_to_output_config(value: Any) -> dict[str, Any] | None:
+    """Preserve the client's named effort for application-level resolution."""
     if not isinstance(value, Mapping):
         return None
-    if value.get("effort") == "none":
-        return {"type": "disabled", "enabled": False}
-    if any(item is not None for item in value.values()):
-        return {"type": "enabled", "enabled": True}
+    effort = value.get("effort")
+    if isinstance(effort, str) and effort.strip():
+        return {"effort": effort.strip().lower()}
     return None
 
 
@@ -45,6 +55,6 @@ def _text_parts_from_items(value: Any, *, item_type: str) -> list[str]:
     for item in value:
         if isinstance(item, dict) and item.get("type") == item_type:
             text = optional_str(item.get("text"))
-            if text:
+            if text is not None:
                 parts.append(text)
     return parts

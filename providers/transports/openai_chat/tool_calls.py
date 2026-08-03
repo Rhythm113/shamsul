@@ -8,6 +8,7 @@ from core.anthropic.streaming import (
     AnthropicStreamLedger,
     tool_schemas_by_name,
 )
+from core.anthropic.tools import normalize_tool_parameters
 
 RecordToolExtraContent = Callable[[str, dict[str, Any]], None]
 
@@ -17,20 +18,9 @@ def repair_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any
     if not isinstance(arguments, dict):
         return arguments
 
-    # 1. Parameter name aliases alignment
-    if (
-        name in {"Read", "Write", "Edit", "NotebookEdit"}
-        and "file_path" not in arguments
-    ):
-        for alt in ("AbsolutePath", "absolutePath", "path", "filePath"):
-            if alt in arguments:
-                arguments["file_path"] = arguments.pop(alt)
-                break
-    elif name in {"Bash", "PowerShell"} and "command" not in arguments:
-        for alt in ("CommandLine", "commandLine", "cmd"):
-            if alt in arguments:
-                arguments["command"] = arguments.pop(alt)
-                break
+    # 1. Parameter name aliases alignment — delegate to the shared name-aware
+    #    normalizer so the structured and heuristic tool-call paths agree.
+    arguments = normalize_tool_parameters(name, arguments)
 
     # 2. Tool Agent specific fixes
     if name == "Agent" and "prompt" not in arguments and "description" in arguments:

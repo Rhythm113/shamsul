@@ -12,6 +12,33 @@ _CONTROL_TOKEN_RE = re.compile(r"<\|[^|>]{1,80}\|>")
 _CONTROL_TOKEN_START = "<|"
 _CONTROL_TOKEN_END = "|>"
 
+# Centralized regex for stripping stray XML tags from local model output.
+# All consumers (mahbub provider, ollama provider, etc.) should use
+# strip_stray_tags() instead of maintaining their own copy.
+_STRAY_TAGS_RE = re.compile(
+    r"(</?(?:parameter|param|function|file_path|path|content|code|TargetFile|"
+    r"Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|"
+    r"AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|"
+    r"IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern|argument_context|"
+    r"argument|arguments|context|plan|memory|delegate|thinking)\b[^>]*>|●?\s*<function=[^>]*>|●?\s*<parameter=[^>]*>)",
+    re.IGNORECASE,
+)
+
+
+def strip_stray_tags(text: str) -> str:
+    """Remove stray XML tool/parameter tags from model output text.
+
+    This is the **single source of truth** for stray tag stripping across
+    the entire codebase. Do not duplicate this regex elsewhere.
+    """
+    if not text:
+        return text
+    cleaned = _STRAY_TAGS_RE.sub("", text)
+    # If the text chunk consisted solely of stray tags and whitespace, return empty
+    if not cleaned.strip() and text.strip():
+        return ""
+    return cleaned
+
 
 class ParserState(Enum):
     TEXT = 1
@@ -64,46 +91,133 @@ def resolve_tool_name(name: str, allowed: set[str] | None) -> str | None:
     return None
 
 
+# Tool-family groupings used for name-aware parameter normalization. Claude Code
+# CLI registers Write/Edit/Read/Bash/Glob/Grep; Codex/Cline-style clients
+# register the OpenAI coding-tool names on the right.
+_WRITE_TOOLS = frozenset({"Write", "write_to_file", "write_file"})
+_EDIT_TOOLS = frozenset({"Edit", "replace_file_content", "multi_replace_file_content"})
+_READ_TOOLS = frozenset({"Read", "view_file", "read_file", "NotebookEdit"})
+_FILE_TOOLS = _WRITE_TOOLS | _EDIT_TOOLS | _READ_TOOLS
+_BASH_TOOLS = frozenset({"Bash", "PowerShell", "run_command", "execute_command"})
+_GREP_TOOLS = frozenset({"Grep"})
+_GLOB_TOOLS = frozenset({"Glob", "list_dir", "list_files"})
+
+
+def _tool_base_name(tool_name: str | None) -> str:
+    """Strip a namespace prefix (``default_api:write_to_file`` -> ``write_to_file``)."""
+    base = tool_name or ""
+    return base.partition(":")[2] or base
+
+
+def _first_nonempty_alias(
+    res: dict[str, Any], canonical: str, aliases: tuple[str, ...]
+) -> None:
+    """Move the first non-empty alias value onto the canonical key.
+
+    Alias keys are always removed — a stray ``code`` next to a canonical
+    ``content`` would trip strict client-side JSON schema validation.
+    """
+    if canonical in res and res[canonical] not in (None, ""):
+        for alias in aliases:
+            if alias != canonical:
+                res.pop(alias, None)
+        return
+    for alias in aliases:
+        value = res.get(alias)
+        if value is not None and value != "":
+            if alias != canonical:
+                res.pop(alias, None)
+            res[canonical] = value
+            return
+
+
 def normalize_tool_parameters(
     tool_name: str | None, tool_input: dict[str, Any]
 ) -> dict[str, Any]:
-    """Normalize tool parameter keys for Claude Code CLI and local models."""
+    """Normalize tool parameter keys to the *resolved* tool's canonical names.
+
+    Small models emit many aliases for the same parameter (``TargetFile``,
+    ``AbsolutePath``, ``code``, ``CodeContent``, ...). The mapping is keyed off
+    the resolved tool name so each client's convention is respected:
+
+    * Claude Code CLI: ``Write(file_path, content)``, ``Edit(file_path, old_string,
+      new_string)``, ``Read(file_path)``, ``Bash(command)``, ``Glob(pattern)``,
+      ``Grep(pattern)``.
+    * Codex/Cline style: ``write_to_file(file_path, code)``, ``view_file(file_path)``,
+      ``run_command(command)``, ``list_dir(relative_path)``.
+    """
     if not isinstance(tool_input, dict):
         return tool_input
 
     res = dict(tool_input)
+    base = _tool_base_name(tool_name)
 
-    # 1. File path alias mapping
-    if "file_path" not in res and "path" not in res:
-        alias_file = (
-            res.get("TargetFile") or res.get("AbsolutePath") or res.get("filename")
+    # 1. File path alias mapping (file-based tools only).
+    if base in _FILE_TOOLS:
+        _first_nonempty_alias(
+            res,
+            "file_path",
+            ("path", "TargetFile", "AbsolutePath", "filename", "filePath"),
         )
-        if alias_file:
-            res["file_path"] = alias_file
 
-    # 2. Content alias mapping
-    if "code" not in res and "content" not in res:
-        alias_content = res.get("CodeContent") or res.get("text")
-        if alias_content:
-            res["code"] = alias_content
-
-    # 3. Edit old string mapping
-    if "old_string" not in res and "TargetContent" not in res and "target" not in res:
-        pass
-
-    # 4. Search pattern mapping
-    if "pattern" not in res:
-        alias_pattern = res.get("query") or res.get("SearchQuery")
-        if alias_pattern:
-            res["pattern"] = alias_pattern
-
-    # 5. Command execution mapping
-    if "command" not in res:
-        alias_cmd = res.get("CommandLine") or res.get("cmd")
-        if alias_cmd:
-            res["command"] = alias_cmd
+    # 2. Content mapping — Claude Code Write requires ``content``, while
+    #    Codex/Cline ``write_to_file`` uses ``code``. Edit splits content into
+    #    old_string/new_string.
+    if base == "Write":
+        _first_nonempty_alias(res, "content", ("code", "CodeContent", "text"))
+    elif base in _WRITE_TOOLS:
+        _first_nonempty_alias(res, "code", ("CodeContent", "content", "text"))
+    elif base == "Edit":
+        _first_nonempty_alias(
+            res,
+            "new_string",
+            ("code", "CodeContent", "ReplacementContent", "TargetContent", "text"),
+        )
+        _first_nonempty_alias(
+            res,
+            "old_string",
+            ("SearchContent", "SearchPattern", "oldContent", "TargetContent"),
+        )
+    elif base in _BASH_TOOLS:
+        _first_nonempty_alias(res, "command", ("CommandLine", "commandLine", "cmd"))
+    elif base in _GREP_TOOLS:
+        _first_nonempty_alias(res, "pattern", ("query", "SearchQuery"))
+    elif base in _GLOB_TOOLS:
+        _first_nonempty_alias(
+            res, "pattern", ("query", "SearchQuery", "directory", "dir")
+        )
 
     return res
+
+
+def is_complete_tool_call(name: str | None, params: dict[str, Any]) -> bool:
+    """Whether a heuristic tool call carries the params required to execute.
+
+    Guards against emitting ``tool_use`` blocks the client cannot run — a Write
+    with a file path but no content surfaces as "Error writing file". Missing
+    keys are judged on the raw (pre-normalization) aliases so every spelling a
+    small model might use counts.
+    """
+    base = _tool_base_name(name)
+    has_path = any(
+        k in params
+        for k in ("file_path", "path", "TargetFile", "AbsolutePath", "filename")
+    )
+    if base in _WRITE_TOOLS:
+        return has_path and any(k in params for k in ("code", "CodeContent", "content"))
+    if base in _EDIT_TOOLS:
+        return has_path and any(
+            k in params
+            for k in (
+                "ReplacementContent",
+                "replacement",
+                "TargetContent",
+                "target",
+                "code",
+                "new_string",
+            )
+        )
+    return True
 
 
 def infer_tool_name_from_params(
@@ -137,6 +251,96 @@ def is_potential_tool_call_start(buf: str) -> bool:
     return bool(re.match(r"^\w+\(?$", stripped))
 
 
+_PARAM_OPEN_RE = re.compile(
+    r"<(?:parameter|param)(?:\s+name\s*=\s*|=)\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?\s*>",
+    re.IGNORECASE,
+)
+
+
+_KNOWN_TOOL_PARAM_NAMES = frozenset(
+    {
+        "file_path",
+        "path",
+        "TargetFile",
+        "AbsolutePath",
+        "filename",
+        "filePath",
+        "code",
+        "CodeContent",
+        "content",
+        "text",
+        "ReplacementContent",
+        "TargetContent",
+        "SearchContent",
+        "SearchPattern",
+        "old_string",
+        "new_string",
+        "command",
+        "CommandLine",
+        "commandLine",
+        "cmd",
+        "pattern",
+        "query",
+        "SearchQuery",
+        "directory",
+        "dir",
+        "StartLine",
+        "EndLine",
+        "Instruction",
+        "Description",
+        "AllowMultiple",
+        "IsRegex",
+        "MatchPerLine",
+        "CaseInsensitive",
+        "Includes",
+        "SearchPath",
+    }
+)
+
+_BARE_PARAM_START_RE = re.compile(
+    r"^\s*[●•\-*]?\s*<(?:parameter|param)(?:\s+name\s*=\s*|=)\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?",
+    re.IGNORECASE,
+)
+
+
+def _match_param_open(buffer: str) -> tuple[int, int, str] | None:
+    """Return ``(start, end, name)`` of the next ``<parameter=name>`` opening tag."""
+    match = _PARAM_OPEN_RE.search(buffer)
+    if match:
+        return match.start(), match.end(), match.group(1)
+    return None
+
+
+def _match_param_close(buffer: str, name: str) -> tuple[int, int] | None:
+    """Return ``(start, end)`` of the earliest closing tag for an open parameter.
+
+    Accepts ``</parameter>``, ``</param>``, and the dynamic ``</{name}>`` form
+    that small models sometimes emit.
+    """
+    low = buffer.lower()
+    candidates: list[tuple[int, int]] = []
+    for pattern in (f"</{name}>", "</parameter>", "</param>"):
+        idx = low.find(pattern.lower())
+        if idx != -1:
+            candidates.append((idx, idx + len(pattern)))
+    return min(candidates, key=lambda item: item[0]) if candidates else None
+
+
+def _earliest_tool_end_marker(buffer: str) -> int | None:
+    """Return the index of the earliest bullet or ``<function=`` new-tool marker."""
+    indexes: list[int] = []
+    for marker in ("●", "•"):
+        idx = buffer.find(marker)
+        if idx != -1:
+            indexes.append(idx)
+    low = buffer.lower()
+    for marker in ("<function=", "<function:"):
+        idx = low.find(marker)
+        if idx != -1:
+            indexes.append(idx)
+    return min(indexes) if indexes else None
+
+
 class HeuristicToolParser:
     """
     Stateful parser for raw text tool calls.
@@ -149,16 +353,8 @@ class HeuristicToolParser:
     _FUNC_START_PATTERN = re.compile(
         r"(?:●|[●•\-*]|\b)?\s*<function[:=]\s*([^>]+)>", re.IGNORECASE
     )
-    _PARAM_PATTERN = re.compile(
-        r"<(?:parameter|param)(?:=|\s+name=[\"']?)([^>\"']+)(?:[\"'])?>(.*?)(?:</(?:parameter|param)>|</\1>|$)",
-        re.IGNORECASE | re.DOTALL,
-    )
     _WEB_TOOL_JSON_PATTERN = re.compile(
         r"(?is)\b(?:use\s+)?(?P<tool>WebFetch|WebSearch)\b.*?(?P<json>\{.*?\})"
-    )
-    _STRAY_TAGS_RE = re.compile(
-        r"(</?(?:parameter|param|function|file_path|path|content|code|TargetFile|Instruction|Description|ReplacementContent|StartLine|EndLine|TargetContent|AllowMultiple|AbsolutePath|DirectoryPath|SearchPath|Query|CaseInsensitive|IsRegex|MatchPerLine|Includes|command|cmd|cwd|pattern|argument_context|argument|arguments|context)(?:=[^>]*)?>|●?\s*<function=[^>]*>|●?\s*<parameter=[^>]*>)",
-        re.IGNORECASE,
     )
 
     def __init__(self, allowed_tool_names: set[str] | None = None):
@@ -168,6 +364,10 @@ class HeuristicToolParser:
         self._current_function_name = None
         self._current_parameters = {}
         self.allowed_tool_names = allowed_tool_names
+        # Streaming parameter state: an open ``<parameter=name>`` accumulates its
+        # value incrementally so unterminated tags survive chunk boundaries.
+        self._open_param_name: str | None = None
+        self._open_param_value = ""
 
     def _extract_web_tool_json_calls(self) -> tuple[str, list[dict[str, Any]]]:
         detected_tools: list[dict[str, Any]] = []
@@ -370,29 +570,10 @@ class HeuristicToolParser:
                 elif tool_name in {"run_command", "execute_command"}:
                     tool_input["command"] = val
 
-            # Validate required parameters for Write and Edit tools
-            is_valid = True
-            if (
-                tool_name in {"Write", "write_to_file"}
-                and not any(k in tool_input for k in {"code", "CodeContent", "content"})
-            ) or (
-                tool_name
-                in {
-                    "Edit",
-                    "replace_file_content",
-                    "multi_replace_file_content",
-                }
-                and not any(
-                    k in tool_input
-                    for k in {
-                        "ReplacementContent",
-                        "replacement",
-                        "TargetContent",
-                        "target",
-                    }
-                )
-            ):
-                is_valid = False
+            # Validate required parameters for Write and Edit tools so we never
+            # emit a tool call the client cannot execute (e.g. a Write with a
+            # file path but no content would fail as "Error writing file").
+            is_valid = is_complete_tool_call(tool_name, tool_input)
 
             if is_valid:
                 detected_tools.append(
@@ -462,6 +643,14 @@ class HeuristicToolParser:
                     if m_idx != -1 and (idx == -1 or m_idx < idx):
                         idx = m_idx
 
+                bare_param_match = _BARE_PARAM_START_RE.search(self._buffer)
+                if bare_param_match:
+                    param_name = bare_param_match.group(1)
+                    if param_name in _KNOWN_TOOL_PARAM_NAMES:
+                        p_idx = bare_param_match.start()
+                        if idx == -1 or p_idx < idx:
+                            idx = p_idx
+
                 if idx != -1:
                     filtered_output_parts.append(self._buffer[:idx])
                     self._buffer = self._buffer[idx:]
@@ -484,9 +673,17 @@ class HeuristicToolParser:
                         func_name, self.allowed_tool_names
                     )
                     if self.allowed_tool_names and resolved_name is None:
-                        # Unregistered tool, treat as plain text/skip
-                        filtered_output_parts.append(self._buffer[0])
-                        self._buffer = self._buffer[1:]
+                        # Unregistered tool, treat as plain text/skip along with attached parameters
+                        skip_len = match.end()
+                        param_tail_match = re.match(
+                            r"^(?:\s*<(?:parameter|param)[^>]*>[\s\S]*?</(?:parameter|param|file_path|path|content|code|[A-Za-z_]+)>)*",
+                            self._buffer[skip_len:],
+                            re.IGNORECASE,
+                        )
+                        if param_tail_match:
+                            skip_len += param_tail_match.end()
+                        filtered_output_parts.append(self._buffer[:skip_len])
+                        self._buffer = self._buffer[skip_len:]
                         self._state = ParserState.TEXT
                         continue
 
@@ -521,39 +718,110 @@ class HeuristicToolParser:
                 finished_tool_call = False
 
                 while True:
-                    param_match = self._PARAM_PATTERN.search(self._buffer)
-                    if param_match:
-                        matched_text = param_match.group(0)
-                        param_name = param_match.group(1)
-                        if matched_text.endswith(
-                            "</parameter>"
-                        ) or matched_text.endswith(f"</{param_name}>"):
-                            pre_match_text = self._buffer[: param_match.start()]
-                            if pre_match_text:
-                                filtered_output_parts.append(pre_match_text)
+                    if self._open_param_name is None:
+                        open_match = _match_param_open(self._buffer)
+                        end_marker = _earliest_tool_end_marker(self._buffer)
 
-                            key = param_name.strip()
-                            val = param_match.group(2).strip()
-                            self._current_parameters[key] = val
-                            self._buffer = self._buffer[param_match.end() :]
+                        if open_match is not None and (
+                            end_marker is None or open_match[0] < end_marker
+                        ):
+                            # Text before the opening tag belongs to the model
+                            # narration, not the tool input.
+                            pre = self._buffer[: open_match[0]]
+                            if pre:
+                                filtered_output_parts.append(pre)
+                            self._open_param_name = open_match[2]
+                            self._open_param_value = ""
+                            self._buffer = self._buffer[open_match[1] :]
                             continue
-                    break
 
-                if "●" in self._buffer or "•" in self._buffer:
-                    idx = (
-                        self._buffer.find("●")
-                        if "●" in self._buffer
-                        else self._buffer.find("•")
-                    )
-                    if idx > 0:
-                        filtered_output_parts.append(self._buffer[:idx])
-                        self._buffer = self._buffer[idx:]
-                    finished_tool_call = True
-                elif len(self._buffer) > 0 and not self._buffer.strip().startswith("<"):
-                    if "<parameter=" not in self._buffer:
+                        if end_marker is not None:
+                            pre = self._buffer[:end_marker]
+                            if pre:
+                                filtered_output_parts.append(pre)
+                            self._buffer = self._buffer[end_marker:]
+                            finished_tool_call = True
+                            break
+
+                        # A partial opening tag (e.g. "<parameter=ar" split across
+                        # chunks) must be held for the next chunk, not flushed, or
+                        # the parameters would be lost.
+                        low = self._buffer.lower()
+                        if "<parameter" in low or "<function" in low:
+                            break
+
+                        # Trailing text with no structured content — the call
+                        # ends. An empty buffer, or one that may begin a partial
+                        # tag (e.g. "<parameter=ar" or just "<p"), is held instead
+                        # so parameters arriving in later chunks still attach;
+                        # flush() emits the tool at end of stream.
+                        if not self._buffer or self._buffer.lstrip().startswith("<"):
+                            break
                         filtered_output_parts.append(self._buffer)
                         self._buffer = ""
                         finished_tool_call = True
+                        break
+
+                    # An open parameter value is being accumulated. A closing tag
+                    # belongs to this parameter only if it appears before any
+                    # nested ``<parameter=`` opening (otherwise that close tag
+                    # terminates the nested parameter, not ours).
+                    close = _match_param_close(self._buffer, self._open_param_name)
+                    next_open = _match_param_open(self._buffer)
+                    if close is not None and (
+                        next_open is None or close[0] < next_open[0]
+                    ):
+                        self._open_param_value += self._buffer[: close[0]]
+                        self._current_parameters[self._open_param_name] = (
+                            self._open_param_value.strip()
+                        )
+                        self._open_param_name = None
+                        self._open_param_value = ""
+                        self._buffer = self._buffer[close[1] :]
+                        continue
+
+                    # Unterminated value: it ends at the next parameter opening or
+                    # at a new tool marker, whichever comes first. This is what
+                    # keeps a trailing Write's content from being dropped when the
+                    # model forgets to close the tag before emitting the next tool.
+                    boundaries: list[int] = []
+                    if next_open is not None:
+                        boundaries.append(next_open[0])
+                    end_marker = _earliest_tool_end_marker(self._buffer)
+                    if end_marker is not None:
+                        boundaries.append(end_marker)
+
+                    if boundaries:
+                        boundary = min(boundaries)
+                        self._open_param_value += self._buffer[:boundary]
+                        self._current_parameters[self._open_param_name] = (
+                            self._open_param_value.strip()
+                        )
+                        self._open_param_name = None
+                        self._open_param_value = ""
+                        self._buffer = self._buffer[boundary:]
+                        continue
+
+                    # No closing tag yet. Accumulate the value incrementally, but
+                    # never absorb text that may begin a closing tag — a "``</``"
+                    # (or a bare trailing ``<``) could be a ``</parameter>`` split
+                    # across chunks, which must be recognized once the next chunk
+                    # arrives.
+                    close_prefix = self._buffer.lower().find("</")
+                    if close_prefix == -1:
+                        if self._buffer.endswith("<"):
+                            self._open_param_value += self._buffer[:-1]
+                            self._buffer = "<"
+                            break
+                        self._open_param_value += self._buffer
+                        self._buffer = ""
+                        break
+                    if close_prefix > 0:
+                        self._open_param_value += self._buffer[:close_prefix]
+                        self._buffer = self._buffer[close_prefix:]
+                        continue
+                    # Buffer starts with a possible partial close tag — hold.
+                    break
 
                 if finished_tool_call:
                     func_name = (
@@ -566,6 +834,12 @@ class HeuristicToolParser:
                         self.allowed_tool_names
                         and func_name not in self.allowed_tool_names
                     ):
+                        self._state = ParserState.TEXT
+                        continue
+
+                    if not is_complete_tool_call(func_name, self._current_parameters):
+                        # Emitting it would surface a client error ("Error
+                        # writing file"); drop it and continue parsing.
                         self._state = ParserState.TEXT
                         continue
 
@@ -588,8 +862,7 @@ class HeuristicToolParser:
                 else:
                     break
 
-        filtered_text = "".join(filtered_output_parts)
-        filtered_text = self._STRAY_TAGS_RE.sub("", filtered_text)
+        filtered_text = strip_stray_tags("".join(filtered_output_parts))
         return filtered_text, detected_tools
 
     def flush(self) -> list[dict[str, Any]]:
@@ -597,6 +870,17 @@ class HeuristicToolParser:
         self._buffer = self._strip_control_tokens(self._buffer)
         detected_tools = []
         if self._state == ParserState.PARSING_PARAMETERS:
+            # Commit any open parameter accumulated across chunk boundaries so a
+            # trailing Write's content is never dropped at end of stream.
+            if self._open_param_name is not None:
+                self._open_param_value += self._buffer
+                self._current_parameters[self._open_param_name] = (
+                    self._open_param_value.strip()
+                )
+                self._open_param_name = None
+                self._open_param_value = ""
+                self._buffer = ""
+
             partial_matches = re.finditer(
                 r"<parameter=([^>]+)>(.*)$", self._buffer, re.DOTALL
             )
@@ -613,7 +897,9 @@ class HeuristicToolParser:
             func_name = self._current_function_name or infer_tool_name_from_params(
                 self._current_parameters, self.allowed_tool_names
             )
-            if not self.allowed_tool_names or func_name in self.allowed_tool_names:
+            if (
+                not self.allowed_tool_names or func_name in self.allowed_tool_names
+            ) and is_complete_tool_call(func_name, self._current_parameters):
                 detected_tools.append(
                     {
                         "type": "tool_use",

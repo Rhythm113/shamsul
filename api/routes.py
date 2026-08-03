@@ -356,3 +356,61 @@ async def api_pull_model(
     except Exception as e:
         logger.error("Failed to pull model: {}", e)
         return {"status": "error", "message": str(e)}
+
+
+class RoleConfigUpdatePayload(BaseModel):
+    planner_model: str | None = None
+    caller_model: str | None = None
+    coder_model: str | None = None
+    sequential_unload: bool | None = None
+
+
+@router.get("/api/ollama/models")
+async def api_get_ollama_models(settings: Settings = Depends(get_settings)):
+    """Return list of locally installed models from Ollama."""
+    from core.collab_engine import CollabEngine, RoleModelsConfig
+
+    config = RoleModelsConfig(
+        planner_model=settings.ollama_planner_model,
+        caller_model=settings.ollama_caller_model,
+        coder_model=settings.ollama_coder_model,
+        sequential_unload=settings.ollama_sequential_unload,
+        base_url=settings.ollama_base_url,
+    )
+    engine = CollabEngine(config)
+    models = await engine.list_available_models()
+    return {"models": models}
+
+
+@router.get("/api/config/roles")
+async def api_get_role_config(settings: Settings = Depends(get_settings)):
+    """Return active model assignments for Planner, Caller, and Coder roles."""
+    return {
+        "planner_model": settings.ollama_planner_model,
+        "caller_model": settings.ollama_caller_model,
+        "coder_model": settings.ollama_coder_model,
+        "sequential_unload": settings.ollama_sequential_unload,
+    }
+
+
+@router.post("/api/config/roles")
+async def api_update_role_config(
+    payload: RoleConfigUpdatePayload,
+    settings: Settings = Depends(get_settings),
+):
+    """Update model assignments for Planner, Caller, and Coder roles live."""
+    if payload.planner_model is not None:
+        settings.ollama_planner_model = payload.planner_model
+    if payload.caller_model is not None:
+        settings.ollama_caller_model = payload.caller_model
+    if payload.coder_model is not None:
+        settings.ollama_coder_model = payload.coder_model
+    if payload.sequential_unload is not None:
+        settings.ollama_sequential_unload = payload.sequential_unload
+    return {
+        "status": "ok",
+        "planner_model": settings.ollama_planner_model,
+        "caller_model": settings.ollama_caller_model,
+        "coder_model": settings.ollama_coder_model,
+        "sequential_unload": settings.ollama_sequential_unload,
+    }
