@@ -13,6 +13,14 @@ from config.settings import Settings, get_settings
 
 # Sentinel returned by _run_replan when the planner judges the whole task complete.
 _PLAN_COMPLETE = "complete"
+# Fallback directive injected when the planner wrongly declares the task complete while
+# the executor is still mid-task. Keeps the loop pursuing the remaining instructions
+# instead of stopping.
+_CONTINUE_DIRECTIVE = (
+    "[SYSTEM] The task is NOT complete — the user's request contains instructions that "
+    "have not all been executed yet. Re-read the requirements file (use read_file) and "
+    "continue executing the next phase immediately. Do NOT stop and do NOT reply TASK COMPLETE."
+)
 
 
 class ShamsulAgentEngine:
@@ -20,10 +28,11 @@ class ShamsulAgentEngine:
 
     The Planner produces an initial plan and then keeps judging progress: whenever the
     Executor stops emitting tool calls (a stall), the Planner is re-consulted with the
-    full discovered context (file contents, tool results) and either confirms completion
-    or hands back the NEXT concrete step. This replaces the old plan-once-then-execute
-    flow, which stalled mid-task whenever a step (e.g. reading a requirements file)
-    invalidated the initial plan.
+    full discovered context (file contents, tool results) and hands back the NEXT
+    concrete step. The turn only ends when the Executor itself signals completion
+    ("TASK COMPLETE") AND the Planner confirms it against the full requirements — a
+    Planner that declares the task done mid-task cannot stop the loop, so the remaining
+    phases of the request are pursued in a loop until genuinely finished.
     """
 
     def __init__(
@@ -78,7 +87,8 @@ class ShamsulAgentEngine:
             f"5. NEVER say 'I cannot access your filesystem' or ask the user to copy/paste file contents.\n"
             f"6. Work in SMALL STEPS. Each turn, only execute the CURRENT step described by the latest directive or your plan. You do NOT need to finish the whole project in one turn — the Lead Planner keeps sending you the next step.\n"
             f"7. If the user asked you to read a file (e.g. 'read req.text and follow the instructions'), ALWAYS read it first, then follow the instructions it contains.\n"
-            f"8. When the ENTIRE user request is finished, reply exactly: TASK COMPLETE\n"
+            f"8. Keep narration to a minimum: prefer calling tools over explaining. You may output at most ONE short sentence before your tool calls.\n"
+            f"9. When you have completed the ENTIRE user request (every phase and instruction), reply exactly: TASK COMPLETE and stop. If ANY instructions remain, do NOT reply TASK COMPLETE — keep calling tools to execute them.\n"
         )
 
         final_response = await self._run_executor_loop(
@@ -178,26 +188,41 @@ class ShamsulAgentEngine:
         messages: list[dict[str, Any]],
         executed_tool_log: list[dict[str, Any]],
         last_executor_text: str,
+        executor_signaled_complete: bool,
         on_thinking: Callable[[str], None] | None,
     ) -> str:
-        """Ask the planner to judge progress.
+        """Ask the planner to judge progress; hand back the next step or confirm completion.
 
-        Returns ``_PLAN_COMPLETE`` when the planner considers the request done, otherwise
-        the next-step directive text for the executor to act on.
+        Completion (``_PLAN_COMPLETE``) is only honored when the executor itself signalled
+        it via ``executor_signaled_complete``. On a mid-task stall the planner may NOT end
+        the turn — its ``TASK COMPLETE`` is ignored and replaced with ``_CONTINUE_DIRECTIVE``
+        so the remaining phases of the request keep being pursued in a loop.
         """
-        system_prompt = (
-            f"You are the Lead Planner Agent for an autonomous coding assistant working in '{working_dir}'.\n"
-            f"The Executor Agent (a small local model) builds the user's request ONE STEP AT A TIME.\n"
-            f"Given the progress below, decide whether the user's request is now COMPLETE, or produce the "
-            f"NEXT SINGLE CONCRETE STEP for the Executor to take right now.\n"
-            f"- If the whole request is complete, reply exactly: TASK COMPLETE\n"
-            f"- Otherwise reply with a single line in this exact format:\n"
-            f"NEXT STEP: <one concrete action naming the exact tool, file path, and what to create/do. Keep it to ONE file or ONE action so a small model can execute it reliably.>"
-        )
+        context = self._summarize_recent_messages(messages)
+        if executor_signaled_complete:
+            system_prompt = (
+                f"You are the Lead Planner Agent for an autonomous coding assistant working in '{working_dir}'.\n"
+                f"The Executor Agent claims it has finished the user's ENTIRE request.\n"
+                f"Review the progress below against the full instructions in FILE CONTENTS READ.\n"
+                f"If EVERY phase and instruction in the user's request has been fulfilled, reply exactly: TASK COMPLETE\n"
+                f"Otherwise reply with a single line: NEXT STEP: <one concrete action the executor should do next>"
+            )
+        else:
+            system_prompt = (
+                f"You are the Lead Planner Agent for an autonomous coding assistant working in '{working_dir}'.\n"
+                f"The Executor Agent has NOT finished the user's request — it still has more instructions to execute.\n"
+                f"Examine the progress below against the full instructions in FILE CONTENTS READ and decide the "
+                f"NEXT SINGLE CONCRETE STEP the executor should take right now.\n"
+                f"Do NOT reply TASK COMPLETE — the task is NOT complete.\n"
+                f"Reply with a single line: NEXT STEP: <one concrete action naming the exact tool, file path, and what to "
+                f"create/do. Keep it to ONE file or ONE action so a small model can execute it reliably. Never use "
+                f"angle-bracket placeholders. Never direct the executor to run mkdir — write_file creates parent "
+                f"directories automatically.>"
+            )
         user_prompt = (
             f"USER REQUEST:\n{user_input}\n\n"
+            f"{context}\n\n"
             f"TOOLS EXECUTED SO FAR:\n{self._summarize_tool_log(executed_tool_log)}\n\n"
-            f"RECENT CONTEXT (what the executor has read / seen):\n{self._summarize_recent_messages(messages)}\n\n"
             f"EXECUTOR LAST OUTPUT:\n{last_executor_text[:2000]}\n\n"
             f"Decision:"
         )
@@ -205,9 +230,12 @@ class ShamsulAgentEngine:
             model, system_prompt, user_prompt, on_thinking
         )
         if not raw:
-            return _PLAN_COMPLETE
+            return _PLAN_COMPLETE if executor_signaled_complete else _CONTINUE_DIRECTIVE
         if "task complete" in raw.lower():
-            return _PLAN_COMPLETE
+            if executor_signaled_complete:
+                return _PLAN_COMPLETE
+            # Mid-task stall: a lazy planner declaring the task done is ignored.
+            return _CONTINUE_DIRECTIVE
         marker = raw.lower().find("next step:")
         if marker != -1:
             directive = raw[marker + len("next step:") :].strip().strip('"')
@@ -217,7 +245,7 @@ class ShamsulAgentEngine:
         cleaned = raw.strip().strip('"')
         if cleaned and "task complete" not in cleaned.lower():
             return cleaned
-        return _PLAN_COMPLETE
+        return _PLAN_COMPLETE if executor_signaled_complete else _CONTINUE_DIRECTIVE
 
     async def _run_executor_loop(
         self,
@@ -287,14 +315,20 @@ class ShamsulAgentEngine:
             messages.append(message_obj)
 
             if not tool_calls:
-                # The executor stalled (text without tools). Re-plan through the planner
-                # instead of giving up: it can see the discovered context (e.g. file
-                # contents) and hand back the next concrete step, or confirm completion.
+                # The executor produced text without tools. This is either a completion
+                # claim ("TASK COMPLETE") or a mid-task stall. Either way the planner is
+                # consulted; the turn only ends when BOTH the executor signals completion
+                # AND the planner confirms it. A planner that declares the task done while
+                # the executor is still mid-task cannot stop the loop.
                 if replans_used >= max_replans:
                     break
                 replans_used += 1
+                signaled = "task complete" in content.lower()
                 if on_text:
-                    on_text("\n[Planning next step...]")
+                    if signaled:
+                        on_text("\n[Verifying completion...]")
+                    else:
+                        on_text("\n[Planning next step...]")
                 outcome = await self._run_replan(
                     planner_model,
                     user_input,
@@ -302,7 +336,8 @@ class ShamsulAgentEngine:
                     messages,
                     executed_tool_log,
                     content,
-                    on_thinking,
+                    executor_signaled_complete=signaled,
+                    on_thinking=on_thinking,
                 )
                 if outcome == _PLAN_COMPLETE:
                     break
@@ -393,9 +428,17 @@ class ShamsulAgentEngine:
         return "\n".join(parts)
 
     def _summarize_recent_messages(self, messages: list[dict[str, Any]]) -> str:
-        """Return the recent exchange (incl. tool results / file contents) for the planner."""
-        recent = []
-        for m in messages[-8:]:
+        """Context for the planner: requirements the executor read (in full) + recent state.
+
+        File-read results are the executor's main source of the task instructions, so they
+        are included in full (the first read, which is usually the requirements file, plus
+        the two most recent reads) rather than truncated or scrolled out of a fixed window —
+        a truncated requirements file is what made the planner declare the task complete
+        after only the first phase.
+        """
+        read_results: list[str] = []
+        recent: list[str] = []
+        for m in messages:
             role = m.get("role", "?")
             content = m.get("content")
             if isinstance(content, list):
@@ -404,12 +447,24 @@ class ShamsulAgentEngine:
             # Skip the per-turn executor system prompt.
             if role == "system" and content.startswith("Operating System Platform"):
                 continue
-            if role == "tool":
-                content = f"[tool result] {content[:2500]}"
-            else:
-                content = content[:2500]
-            recent.append(f"[{role}] {content}")
-        return "\n\n".join(recent)
+            if role == "tool" and content.startswith("--- Content of"):
+                read_results.append(content[:8000])
+                continue
+            recent.append(f"[{role}] {content[:1500]}")
+        parts: list[str] = []
+        if read_results:
+            # Keep the first read (usually the requirements file) plus the two most recent.
+            kept = [read_results[0], *read_results[-2:]]
+            unique = []
+            seen = set()
+            for item in kept:
+                if item not in seen:
+                    seen.add(item)
+                    unique.append(item)
+            parts.append("FILE CONTENTS READ:\n" + "\n\n".join(unique))
+        if recent:
+            parts.append("RECENT EXCHANGE:\n" + "\n\n".join(recent[-4:]))
+        return "\n\n".join(parts) or "(no context yet)"
 
     def _compact_history(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Persist the turn's exchange (minus the executor system prompt) for the next turn."""

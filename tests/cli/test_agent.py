@@ -229,19 +229,55 @@ async def test_executor_stall_replans_and_continues(tmp_path):
 
 @pytest.mark.asyncio
 async def test_replan_confirms_completion_and_ends_turn(tmp_path):
-    """When the planner confirms TASK COMPLETE, the executor loop ends cleanly."""
+    """When the executor signals TASK COMPLETE and the planner confirms it, the loop ends."""
     engine = ShamsulAgentEngine()
     engine.settings.ollama_reasoning_model = "planner-model"
     engine.settings.ollama_coding_model = "executor-model"
 
-    executor_msgs = [{"content": "Nothing to do.", "tool_calls": []}]
+    executor_msgs = [{"content": "TASK COMPLETE", "tool_calls": []}]
     planner_texts = ["No files needed.", "TASK COMPLETE"]
 
     with patch("httpx.AsyncClient.post", _fake_chat_post(executor_msgs, planner_texts)):
         response = await engine.run_turn("hello", str(tmp_path))
 
-    assert "Nothing to do." in response
+    assert "TASK COMPLETE" in response
     assert [m["role"] for m in engine.history] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_mid_task_stall_never_ends_on_planner_complete(tmp_path):
+    """A planner that replies TASK COMPLETE to a mid-task stall cannot stop the loop.
+
+    This is the regression for the 'stops after task complete' bug: the executor had
+    only written the first file but the planner declared the whole request done. Only an
+    executor-signalled TASK COMPLETE (verified by the planner) may end the turn.
+    """
+    engine = ShamsulAgentEngine()
+    engine.settings.ollama_reasoning_model = "planner-model"
+    engine.settings.ollama_coding_model = "executor-model"
+
+    # The executor never finishes: it stalls twice, then signals completion. The planner
+    # (a lazy one) replies TASK COMPLETE to the first two mid-task stalls — those must be
+    # ignored so the loop keeps pursuing the remaining instructions.
+    executor_msgs = [
+        {"content": "Working on it.", "tool_calls": []},
+        {"content": "Still going.", "tool_calls": []},
+        {"content": "TASK COMPLETE", "tool_calls": []},
+    ]
+    planner_texts = [
+        "Initial plan.",
+        "TASK COMPLETE",
+        "TASK COMPLETE",
+        "TASK COMPLETE",
+    ]
+
+    with patch("httpx.AsyncClient.post", _fake_chat_post(executor_msgs, planner_texts)):
+        response = await engine.run_turn("do it", str(tmp_path))
+
+    # Both mid-task stalls were processed (the loop did not stop after the first one).
+    assert "Working on it." in response
+    assert "Still going." in response
+    assert "TASK COMPLETE" in response
 
 
 @pytest.mark.asyncio
