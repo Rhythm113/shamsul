@@ -1,5 +1,6 @@
 """Native agent execution engine for shamsul-agent with a Planner -> Executor Plan-Execute-Replan loop."""
 
+import asyncio
 import json
 import sys
 from collections.abc import Callable
@@ -21,6 +22,18 @@ _CONTINUE_DIRECTIVE = (
     "have not all been executed yet. Re-read the requirements file (use read_file) and "
     "continue executing the next phase immediately. Do NOT stop and do NOT reply TASK COMPLETE."
 )
+# Directive injected once the planner budget is exhausted: the executor must finish the
+# remaining work on its own rather than the loop silently stopping mid-build.
+_FAILSAFE_DIRECTIVE = (
+    "[SYSTEM FAILSAFE] The planning budget is exhausted and the user's request is NOT "
+    "finished. You must now finish the remaining work WITHOUT waiting for more planner "
+    "instructions. Re-read the requirements file (read_file), list_dir to see what exists, "
+    "and continue creating the missing files / next phase. Call at least one tool "
+    "immediately. Do NOT reply TASK COMPLETE."
+)
+# HTTP statuses that warrant a retry (transient server/framing failures only — a 4xx
+# client error is not retried).
+_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class ShamsulAgentEngine:
@@ -47,6 +60,41 @@ class ShamsulAgentEngine:
     def reset(self) -> None:
         """Reset conversation history."""
         self.history.clear()
+
+    @staticmethod
+    async def _post_json_retry(
+        url: str,
+        payload: dict[str, Any],
+        timeout: float,
+        *,
+        retries: int = 3,
+        label: str = "request",
+    ) -> httpx.Response:
+        """POST JSON to ``url``, retrying transient failures with short backoff.
+
+        Only transient conditions (transport/timeout errors and HTTP 429/5xx) are retried;
+        a genuine client error (4xx) propagates immediately so a bad request is surfaced
+        rather than silently retried. After ``retries`` attempts the last error is raised —
+        a mid-task transient failure should therefore never silently end the turn; it is
+        either retried to success or surfaced as an explicit failure.
+        """
+        for attempt in range(1, retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, json=payload)
+                status = getattr(resp, "status_code", None)
+                if status in _TRANSIENT_STATUS_CODES and attempt < retries:
+                    await asyncio.sleep(min(1.5, 0.5 * attempt))
+                    continue
+                resp.raise_for_status()
+                return resp
+            except (httpx.TransportError, OSError) as exc:
+                if attempt < retries:
+                    await asyncio.sleep(min(1.5, 0.5 * attempt))
+                    continue
+                logger.warning("{} failed after {} attempts: {}", label, attempt, exc)
+                raise
+        raise RuntimeError(f"Exhausted retries for {label}")  # pragma: no cover
 
     async def run_turn(
         self,
@@ -120,34 +168,32 @@ class ShamsulAgentEngine:
         ]
         accum = ""
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    json={"model": model, "messages": messages, "stream": True},
-                )
-                resp.raise_for_status()
+            resp = await self._post_json_retry(
+                f"{self.base_url}/chat/completions",
+                {"model": model, "messages": messages, "stream": True},
+                timeout=60.0,
+                label="planner",
+            )
 
-                async for line in resp.aiter_lines():
-                    line = line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line.partition("data:")[2].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        if delta := chunk.get("choices", [{}])[0].get("delta", {}):
-                            content = (
-                                delta.get("content")
-                                or delta.get("reasoning_content")
-                                or ""
-                            )
-                            if content:
-                                accum += content
-                                if on_thinking:
-                                    on_thinking(content)
-                    except Exception:
-                        continue
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data_str = line.partition("data:")[2].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    if delta := chunk.get("choices", [{}])[0].get("delta", {}):
+                        content = (
+                            delta.get("content") or delta.get("reasoning_content") or ""
+                        )
+                        if content:
+                            accum += content
+                            if on_thinking:
+                                on_thinking(content)
+                except Exception:
+                    continue
         except Exception as exc:
             logger.warning("Planner query failed: {}.", exc)
         return accum
@@ -275,6 +321,7 @@ class ShamsulAgentEngine:
         planner_model = self.settings.ollama_reasoning_model
         final_assistant_text = ""
         replans_used = 0
+        completed = False
         executed_tool_log: list[dict[str, Any]] = []
 
         for _turn_idx in range(max_turns):
@@ -287,13 +334,13 @@ class ShamsulAgentEngine:
             }
 
             try:
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.post(
-                        f"{self.base_url}/chat/completions",
-                        json=payload,
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
+                resp = await self._post_json_retry(
+                    f"{self.base_url}/chat/completions",
+                    payload,
+                    timeout=120.0,
+                    label="executor",
+                )
+                data = resp.json()
             except Exception as exc:
                 err_msg = f"API Error during execution loop: {exc}"
                 if on_text:
@@ -321,7 +368,13 @@ class ShamsulAgentEngine:
                 # AND the planner confirms it. A planner that declares the task done while
                 # the executor is still mid-task cannot stop the loop.
                 if replans_used >= max_replans:
-                    break
+                    # Failsafe: the planner budget is exhausted but the task is not
+                    # finished. Stop consulting the planner and keep driving the executor
+                    # to finish the remaining work on its own (bounded by max_turns).
+                    if on_text:
+                        on_text("\n[Failsafe: continuing without planner...]")
+                    messages.append({"role": "user", "content": _FAILSAFE_DIRECTIVE})
+                    continue
                 replans_used += 1
                 signaled = "task complete" in content.lower()
                 if on_text:
@@ -340,6 +393,7 @@ class ShamsulAgentEngine:
                     on_thinking=on_thinking,
                 )
                 if outcome == _PLAN_COMPLETE:
+                    completed = True
                     break
                 messages.append(
                     {
@@ -412,6 +466,14 @@ class ShamsulAgentEngine:
 
         # Persist the full exchange (including tool calls/results) for the next turn.
         self.history = self._compact_history(messages)
+        if not completed:
+            # Failsafe: never end the turn silently mid-task. If the loop exits without a
+            # confirmed TASK COMPLETE, surface an explicit marker so the user knows the
+            # build was left unfinished rather than the prompt just dropping back.
+            note = "\n[UNFINISHED: the agent stopped before the task was completed.]"
+            final_assistant_text += note
+            if on_text:
+                on_text(note)
         return final_assistant_text
 
     def _summarize_tool_log(self, executed_tool_log: list[dict[str, Any]]) -> str:

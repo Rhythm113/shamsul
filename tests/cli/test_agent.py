@@ -128,10 +128,11 @@ def test_shell_read_command_disabled_guard():
 class _ExecutorResponse:
     """Non-streaming chat.completions message used for an executor turn."""
 
-    def __init__(self, message: dict) -> None:
+    def __init__(self, message: dict, status: int = 200) -> None:
         # The real API always sets a message role; default it so history assertions match.
         self._message = dict(message)
         self._message.setdefault("role", "assistant")
+        self.status_code = status
 
     def raise_for_status(self) -> None:
         pass
@@ -145,6 +146,7 @@ class _PlannerResponse:
 
     def __init__(self, text: str) -> None:
         self._text = text
+        self.status_code = 200
 
     def raise_for_status(self) -> None:
         pass
@@ -281,18 +283,89 @@ async def test_mid_task_stall_never_ends_on_planner_complete(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_replan_budget_terminates_loop(tmp_path):
-    """A stalled executor cannot loop forever: the replan budget cuts the turn off."""
+async def test_replan_budget_caps_planner_then_failsafe_drives_executor(tmp_path):
+    """The replan budget caps planner re-consultation but the turn does NOT stop.
+
+    Regressed from the old contract where exhausting the budget cut the loop off. Now,
+    once the budget is spent, the loop stops consulting the planner and keeps driving
+    the executor in failsafe mode until max_turns — then flags the build as UNFINISHED
+    rather than dropping back to the prompt silently.
+    """
     engine = ShamsulAgentEngine()
     engine.settings.ollama_reasoning_model = "planner-model"
     engine.settings.ollama_coding_model = "executor-model"
-    engine.settings.agent_max_replans = 6
+    engine.settings.agent_max_replans = 2
+    engine.settings.agent_max_turns = 4
 
-    executor_msgs = [{"content": "still thinking", "tool_calls": []}] * 8
-    planner_texts = ["initial plan"] + ["NEXT STEP: keep going"] * 6
+    # Every executor turn is a stall. The planner sees the initial plan + exactly the two
+    # replans the budget allows; any further stalls must be handled without the planner.
+    executor_msgs = [
+        {"content": "still thinking", "tool_calls": []},
+        {"content": "still thinking", "tool_calls": []},
+        {"content": "still thinking", "tool_calls": []},
+        {"content": "still thinking", "tool_calls": []},
+    ]
+    planner_texts = [
+        "initial plan",
+        "Executing step 1.",
+        "Executing step 2.",
+    ]
 
     with patch("httpx.AsyncClient.post", _fake_chat_post(executor_msgs, planner_texts)):
         response = await engine.run_turn("do it", str(tmp_path))
 
-    # 6 replans allowed -> 7 stalls are processed before the budget stops the loop.
-    assert response.count("still thinking") == 7
+    # All max_turns executor stalls were processed (the loop did not stop at the budget).
+    # Stalls 3 and 4 ran in failsafe mode with no planner round-trip, then the turn was
+    # flagged UNFINISHED instead of silently returning.
+    assert response.count("still thinking") == 4
+    assert "[UNFINISHED" in response
+
+
+@pytest.mark.asyncio
+async def test_post_json_retry_on_transient_status():
+    """A transient 5xx on the API call is retried to success instead of aborting the turn."""
+    calls = {"n": 0}
+
+    async def side_effect(url, json=None, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _ExecutorResponse(
+                {"content": "retry me", "tool_calls": []}, status=503
+            )
+        return _ExecutorResponse({"content": "ok now", "tool_calls": []})
+
+    with patch("httpx.AsyncClient.post", AsyncMock(side_effect=side_effect)):
+        engine = ShamsulAgentEngine()
+        resp = await engine._post_json_retry(
+            "http://x/chat/completions", {"a": 1}, 30.0
+        )
+
+    assert calls["n"] == 2
+    assert resp.json()["choices"][0]["message"]["content"] == "ok now"
+
+
+@pytest.mark.asyncio
+async def test_failsafe_loop_does_not_silently_stop(tmp_path):
+    """Exhausting the planner budget must NOT silently end the turn mid-build.
+
+    Failsafe: past the planner budget the loop keeps driving the executor with forced
+    directives up to max_turns, and if it still never signals TASK COMPLETE it appends an
+    explicit [UNFINISHED] marker rather than dropping back to the prompt silently.
+    """
+    engine = ShamsulAgentEngine()
+    engine.settings.ollama_reasoning_model = "planner-model"
+    engine.settings.ollama_coding_model = "executor-model"
+    engine.settings.agent_max_replans = 1
+    engine.settings.agent_max_turns = 3
+
+    # The executor never finishes: every turn is a stall with no tool call.
+    executor_msgs = [{"content": "attempt", "tool_calls": []}] * 4
+    planner_texts = ["Initial plan.", "NEXT STEP: keep going"]
+
+    with patch("httpx.AsyncClient.post", _fake_chat_post(executor_msgs, planner_texts)):
+        response = await engine.run_turn("do it", str(tmp_path))
+
+    # The turn did not break silently at the planner budget: it kept iterating in
+    # failsafe mode, then flagged the unfinished build explicitly.
+    assert response.count("attempt") == 3
+    assert "[UNFINISHED" in response
