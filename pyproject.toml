@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shamsul"
-version = "3.13.11"
+version = "3.13.12"
 description = "Middleware between Claude Code CLI (Anthropic API) and local Ollama reasoning/coding models"
 readme = "README.md"
 requires-python = ">=3.14.0"

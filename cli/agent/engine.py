@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -11,6 +12,7 @@ from loguru import logger
 
 from cli.agent.tools import AGENT_TOOLS, execute_agent_tool
 from config.settings import Settings, get_settings
+from core.context.store import LeaderDecision, get_session_store
 
 # Sentinel returned by _run_replan when the planner judges the whole task complete.
 _PLAN_COMPLETE = "complete"
@@ -22,18 +24,75 @@ _CONTINUE_DIRECTIVE = (
     "have not all been executed yet. Re-read the requirements file (use read_file) and "
     "continue executing the next phase immediately. Do NOT stop and do NOT reply TASK COMPLETE."
 )
-# Directive injected once the planner budget is exhausted: the executor must finish the
-# remaining work on its own rather than the loop silently stopping mid-build.
-_FAILSAFE_DIRECTIVE = (
-    "[SYSTEM FAILSAFE] The planning budget is exhausted and the user's request is NOT "
-    "finished. You must now finish the remaining work WITHOUT waiting for more planner "
-    "instructions. Re-read the requirements file (read_file), list_dir to see what exists, "
-    "and continue creating the missing files / next phase. Call at least one tool "
-    "immediately. Do NOT reply TASK COMPLETE."
-)
 # HTTP statuses that warrant a retry (transient server/framing failures only — a 4xx
 # client error is not retried).
 _TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _load_workspace_context(working_dir: str) -> str:
+    """Load project context from context.md or .context.md if present in working_dir."""
+    wdir = Path(working_dir)
+    for fname in ("context.md", ".context.md", "CONTEXT.md"):
+        cfile = wdir / fname
+        if cfile.is_file():
+            try:
+                content = cfile.read_text(encoding="utf-8").strip()
+                if content:
+                    return f"--- WORKSPACE CONTEXT ({fname}) ---\n{content}"
+            except Exception as exc:
+                logger.warning("Failed to read context file {}: {}", cfile, exc)
+    return ""
+
+
+def _save_workspace_context(
+    working_dir: str, session_store: Any, session_id: str
+) -> None:
+    """Persist active session context into context.md in working_dir so progress is never lost."""
+    wdir = Path(working_dir)
+    cfile = wdir / "context.md"
+
+    existing_user_text = ""
+    for fname in ("context.md", ".context.md", "CONTEXT.md"):
+        fpath = wdir / fname
+        if fpath.is_file():
+            cfile = fpath
+            try:
+                raw_text = fpath.read_text(encoding="utf-8").strip()
+                if "--- ACTIVE SESSION PROGRESS ---" in raw_text:
+                    existing_user_text = raw_text.split(
+                        "--- ACTIVE SESSION PROGRESS ---"
+                    )[0].strip()
+                elif (
+                    "# Workspace Context & Session Progress" in raw_text
+                    and "--- ACTIVE FILES ---" in raw_text
+                ):
+                    existing_user_text = raw_text.partition(
+                        "# Workspace Context & Session Progress"
+                    )[0].strip()
+                else:
+                    existing_user_text = raw_text
+            except Exception:
+                pass
+            break
+
+    summary = session_store.get_sub_model_context_summary(session_id)
+    if not summary:
+        return
+
+    parts = []
+    if existing_user_text:
+        parts.append(existing_user_text)
+        parts.append("--- ACTIVE SESSION PROGRESS ---")
+    else:
+        parts.append("# Workspace Context & Session Progress")
+    parts.append(summary)
+
+    content = "\n\n".join(parts) + "\n"
+    try:
+        cfile.write_text(content, encoding="utf-8")
+        logger.debug("Saved context to {}", cfile)
+    except Exception as exc:
+        logger.warning("Failed to write context file {}: {}", cfile, exc)
 
 
 class ShamsulAgentEngine:
@@ -56,10 +115,32 @@ class ShamsulAgentEngine:
         if not self.base_url.endswith("/v1"):
             self.base_url = f"{self.base_url}/v1"
         self.history: list[dict[str, Any]] = []
+        self.session_store = get_session_store(
+            max_files=self.settings.context_store_max_files
+        )
 
-    def reset(self) -> None:
-        """Reset conversation history."""
+    def _get_session_id(self, working_dir: str) -> str:
+        """Derive a consistent session key for a working directory."""
+        return f"shamsul_session_{Path(working_dir).resolve()}"
+
+    def reset(self, working_dir: str | None = None) -> None:
+        """Reset conversation history and session context store."""
         self.history.clear()
+        if working_dir:
+            session_id = self._get_session_id(working_dir)
+            self.session_store.clear_session(session_id)
+
+    def get_context_summary(self, working_dir: str) -> str:
+        """Build full context summary combining workspace context and active session files/memories."""
+        session_id = self._get_session_id(working_dir)
+        parts = []
+        ws_ctx = _load_workspace_context(working_dir)
+        if ws_ctx:
+            parts.append(ws_ctx)
+        store_ctx = self.session_store.get_sub_model_context_summary(session_id)
+        if store_ctx:
+            parts.append(store_ctx)
+        return "\n\n".join(parts) if parts else "(No context accumulated yet)"
 
     @staticmethod
     async def _post_json_retry(
@@ -120,13 +201,19 @@ class ShamsulAgentEngine:
         os_platform = "WINDOWS" if is_win else "LINUX"
         shell_type = "PowerShell / CMD" if is_win else "Bash"
 
+        session_id = self._get_session_id(working_dir)
+        ws_ctx = _load_workspace_context(working_dir)
+        session_ctx = self.session_store.get_sub_model_context_summary(session_id)
+        ctx_parts = [p for p in (ws_ctx, session_ctx) if p]
+        executor_context_str = ("\n\n" + "\n\n".join(ctx_parts)) if ctx_parts else ""
+
         executor_system = (
             f"Operating System Platform: {os_platform}\n"
             f"Shell: {shell_type}\n"
             f"Active Working Directory: {working_dir}\n\n"
             f"You are an autonomous AI software engineer working in '{working_dir}'.\n"
             f"--- LEAD REASONING AGENT PLAN ---\n"
-            f"{plan_text}\n\n"
+            f"{plan_text}{executor_context_str}\n\n"
             f"CRITICAL EXECUTION DIRECTIVES:\n"
             f"1. YOU HAVE REAL TOOLS: read_file, write_file, edit_file, list_dir, run_command, grep_search.\n"
             f"2. OPERATING SYSTEM IS {os_platform}. When using run_command, use valid {shell_type} commands. NEVER use POSIX paths like '/D:/...' or Linux 'mkdir -p /D/...' on Windows.\n"
@@ -152,6 +239,7 @@ class ShamsulAgentEngine:
             max_replans=self.settings.agent_max_replans,
         )
 
+        _save_workspace_context(working_dir, self.session_store, session_id)
         return final_response
 
     async def _query_planner_streaming(
@@ -160,43 +248,59 @@ class ShamsulAgentEngine:
         system_prompt: str,
         user_prompt: str,
         on_thinking: Callable[[str], None] | None,
+        retries: int = 3,
     ) -> str:
-        """Stream one planner response and return the accumulated text."""
+        """Stream one planner response and return the accumulated text, retrying on empty/failed output."""
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        accum = ""
-        try:
-            resp = await self._post_json_retry(
-                f"{self.base_url}/chat/completions",
-                {"model": model, "messages": messages, "stream": True},
-                timeout=60.0,
-                label="planner",
-            )
+        for attempt in range(1, retries + 1):
+            accum = ""
+            try:
+                resp = await self._post_json_retry(
+                    f"{self.base_url}/chat/completions",
+                    {"model": model, "messages": messages, "stream": True},
+                    timeout=60.0,
+                    label="planner",
+                )
 
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data_str = line.partition("data:")[2].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    if delta := chunk.get("choices", [{}])[0].get("delta", {}):
-                        content = (
-                            delta.get("content") or delta.get("reasoning_content") or ""
-                        )
-                        if content:
-                            accum += content
-                            if on_thinking:
-                                on_thinking(content)
-                except Exception:
-                    continue
-        except Exception as exc:
-            logger.warning("Planner query failed: {}.", exc)
-        return accum
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line.partition("data:")[2].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        if delta := chunk.get("choices", [{}])[0].get("delta", {}):
+                            content = (
+                                delta.get("content")
+                                or delta.get("reasoning_content")
+                                or ""
+                            )
+                            if content:
+                                accum += content
+                                if on_thinking:
+                                    on_thinking(content)
+                    except Exception:
+                        continue
+                if accum.strip():
+                    return accum
+            except Exception as exc:
+                logger.warning(
+                    "Planner query attempt {}/{} failed: {}", attempt, retries, exc
+                )
+
+            if attempt < retries:
+                if on_thinking:
+                    on_thinking(
+                        f"\n[Retrying planner (attempt {attempt + 1}/{retries})...]"
+                    )
+                await asyncio.sleep(min(1.5, 0.5 * attempt))
+
+        return ""
 
     async def _run_planner_phase(
         self,
@@ -210,6 +314,12 @@ class ShamsulAgentEngine:
         os_platform = "WINDOWS" if is_win else "LINUX"
         shell_type = "PowerShell / CMD" if is_win else "Bash"
 
+        session_id = self._get_session_id(working_dir)
+        ws_ctx = _load_workspace_context(working_dir)
+        session_ctx = self.session_store.get_sub_model_context_summary(session_id)
+        context_parts = [p for p in (ws_ctx, session_ctx) if p]
+        context_str = ("\n\n" + "\n\n".join(context_parts)) if context_parts else ""
+
         system_prompt = (
             f"Operating System Platform: {os_platform}\n"
             f"Shell: {shell_type}\n"
@@ -217,10 +327,10 @@ class ShamsulAgentEngine:
             f"You are the Head Reasoning Agent. Provide a concise 1-2 sentence action plan for fulfilling the user's request in '{working_dir}'.\n"
             f"CRITICAL: The available tools are: `read_file`, `write_file`, `edit_file`, `list_dir`, `run_command`, `grep_search`.\n"
             f"ALWAYS advise using `read_file` to read files, `list_dir` to list directories, and `write_file` to write files (parent folders auto-created).\n"
-            f"NEVER advise using shell commands (like cat, type, Get-Content, ls, or mkdir) for file operations!"
+            f"NEVER advise using shell commands (like cat, type, Get-Content, ls, or mkdir) for file operations!{context_str}"
         )
         plan_accum = await self._query_planner_streaming(
-            model, system_prompt, user_input, on_thinking
+            model, system_prompt, user_input, on_thinking, retries=3
         )
         if not plan_accum:
             plan_accum = f"Execute request directly: {user_input}"
@@ -244,12 +354,18 @@ class ShamsulAgentEngine:
         the turn — its ``TASK COMPLETE`` is ignored and replaced with ``_CONTINUE_DIRECTIVE``
         so the remaining phases of the request keep being pursued in a loop.
         """
+        session_id = self._get_session_id(working_dir)
+        ws_ctx = _load_workspace_context(working_dir)
+        session_ctx = self.session_store.get_sub_model_context_summary(session_id)
+        context_parts = [p for p in (ws_ctx, session_ctx) if p]
+        ctx_prefix = ("\n\n" + "\n\n".join(context_parts)) if context_parts else ""
+
         context = self._summarize_recent_messages(messages)
         if executor_signaled_complete:
             system_prompt = (
                 f"You are the Lead Planner Agent for an autonomous coding assistant working in '{working_dir}'.\n"
                 f"The Executor Agent claims it has finished the user's ENTIRE request.\n"
-                f"Review the progress below against the full instructions in FILE CONTENTS READ.\n"
+                f"Review the progress below against the full instructions in FILE CONTENTS READ.{ctx_prefix}\n"
                 f"If EVERY phase and instruction in the user's request has been fulfilled, reply exactly: TASK COMPLETE\n"
                 f"Otherwise reply with a single line: NEXT STEP: <one concrete action the executor should do next>"
             )
@@ -258,7 +374,7 @@ class ShamsulAgentEngine:
                 f"You are the Lead Planner Agent for an autonomous coding assistant working in '{working_dir}'.\n"
                 f"The Executor Agent has NOT finished the user's request — it still has more instructions to execute.\n"
                 f"Examine the progress below against the full instructions in FILE CONTENTS READ and decide the "
-                f"NEXT SINGLE CONCRETE STEP the executor should take right now.\n"
+                f"NEXT SINGLE CONCRETE STEP the executor should take right now.{ctx_prefix}\n"
                 f"Do NOT reply TASK COMPLETE — the task is NOT complete.\n"
                 f"Reply with a single line: NEXT STEP: <one concrete action naming the exact tool, file path, and what to "
                 f"create/do. Keep it to ONE file or ONE action so a small model can execute it reliably. Never use "
@@ -273,8 +389,14 @@ class ShamsulAgentEngine:
             f"Decision:"
         )
         raw = await self._query_planner_streaming(
-            model, system_prompt, user_prompt, on_thinking
+            model, system_prompt, user_prompt, on_thinking, retries=3
         )
+        if raw:
+            turn_num = self.session_store.increment_turn(session_id)
+            self.session_store.store_leader_decision(
+                session_id, LeaderDecision(turn=turn_num, plan=raw)
+            )
+            _save_workspace_context(working_dir, self.session_store, session_id)
         if not raw:
             return _PLAN_COMPLETE if executor_signaled_complete else _CONTINUE_DIRECTIVE
         if "task complete" in raw.lower():
@@ -301,19 +423,12 @@ class ShamsulAgentEngine:
         user_input: str,
         on_text: Callable[[str], None] | None,
         on_tool_start: Callable[[str, dict[str, Any]], None] | None,
-        on_tool_end: Callable[[str, str], None] | None,
+        on_tool_end: Callable[[str, str], None] | None = None,
         on_thinking: Callable[[str], None] | None = None,
         max_turns: int = 60,
         max_replans: int = 12,
     ) -> str:
-        """Execute the task with native tool calling, re-planning through the planner on stalls.
-
-        When the Executor stops emitting tool calls, the planner is consulted: it either
-        confirms completion or hands back the next concrete step as a directive. This
-        replaces the old 'nudge twice then give up' behavior, which stopped the agent
-        midway through a task after a discovery step (e.g. reading a requirements file)
-        left the executor without a usable plan.
-        """
+        """Execute the task with native tool calling, re-planning through the planner on stalls."""
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             *self.history,
@@ -362,19 +477,8 @@ class ShamsulAgentEngine:
             messages.append(message_obj)
 
             if not tool_calls:
-                # The executor produced text without tools. This is either a completion
-                # claim ("TASK COMPLETE") or a mid-task stall. Either way the planner is
-                # consulted; the turn only ends when BOTH the executor signals completion
-                # AND the planner confirms it. A planner that declares the task done while
-                # the executor is still mid-task cannot stop the loop.
-                if replans_used >= max_replans:
-                    # Failsafe: the planner budget is exhausted but the task is not
-                    # finished. Stop consulting the planner and keep driving the executor
-                    # to finish the remaining work on its own (bounded by max_turns).
-                    if on_text:
-                        on_text("\n[Failsafe: continuing without planner...]")
-                    messages.append({"role": "user", "content": _FAILSAFE_DIRECTIVE})
-                    continue
+                # The executor produced text without tools. Consult the planner to get
+                # the next step or confirm completion. Planner queries retry automatically.
                 replans_used += 1
                 signaled = "task complete" in content.lower()
                 if on_text:
@@ -423,6 +527,26 @@ class ShamsulAgentEngine:
                     on_tool_start(t_name, args_dict)
 
                 result_text = execute_agent_tool(t_name, args_dict, working_dir)
+
+                # Store file read/write updates in session context store
+                if t_name in ("read_file", "write_file", "edit_file"):
+                    file_path = (
+                        args_dict.get("file_path") or args_dict.get("path") or ""
+                    )
+                    if file_path and not result_text.startswith("Error"):
+                        session_id = self._get_session_id(working_dir)
+                        abs_file = Path(working_dir) / file_path
+                        if abs_file.is_file():
+                            try:
+                                file_content = abs_file.read_text(encoding="utf-8")
+                                self.session_store.update_file(
+                                    session_id, str(file_path), file_content
+                                )
+                                _save_workspace_context(
+                                    working_dir, self.session_store, session_id
+                                )
+                            except Exception:
+                                pass
 
                 if on_tool_end:
                     on_tool_end(t_name, result_text)

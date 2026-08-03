@@ -85,6 +85,8 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
         }
 
         .logo-container {
@@ -117,6 +119,34 @@
             -webkit-text-fill-color: transparent;
         }
 
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            flex-wrap: wrap;
+        }
+
+        .model-pill {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: rgba(168, 85, 247, 0.08);
+            border: 1px solid rgba(168, 85, 247, 0.2);
+            padding: 0.45rem 0.95rem;
+            border-radius: 99px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .pill-label {
+            color: var(--text-secondary);
+        }
+
+        .pill-val {
+            color: #c084fc;
+            font-weight: 600;
+        }
+
         .status-badge {
             display: flex;
             align-items: center;
@@ -136,6 +166,39 @@
             background-color: var(--success-color);
             border-radius: 50%;
             box-shadow: 0 0 8px var(--success-color);
+        }
+
+        @keyframes pulseGlow {
+            0% { transform: scale(0.95); opacity: 0.6; box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.6); }
+            70% { transform: scale(1.05); opacity: 1; box-shadow: 0 0 0 8px rgba(168, 85, 247, 0); }
+            100% { transform: scale(0.95); opacity: 0.6; box-shadow: 0 0 0 0 rgba(168, 85, 247, 0); }
+        }
+
+        .thinking-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.35rem 0.85rem;
+            background: rgba(168, 85, 247, 0.12);
+            border: 1px solid rgba(168, 85, 247, 0.25);
+            border-radius: 99px;
+            font-size: 0.8rem;
+            color: #c084fc;
+            font-weight: 500;
+        }
+
+        .thinking-dot {
+            width: 7px;
+            height: 7px;
+            background-color: #a855f7;
+            border-radius: 50%;
+            animation: pulseGlow 1.6s infinite ease-in-out;
+        }
+
+        .model-output {
+            white-space: pre-wrap;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
         }
 
         main {
@@ -390,9 +453,23 @@
             <div class="logo-icon">S</div>
             <div class="logo-text">shamsul-server</div>
         </div>
-        <div class="status-badge">
-            <div class="status-dot"></div>
-            <span>Server Active</span>
+        <div class="header-right">
+            <div class="model-pill">
+                <span class="pill-label">Planner:</span>
+                <span id="header-reasoning-model" class="pill-val">...</span>
+            </div>
+            <div class="model-pill">
+                <span class="pill-label">Coder:</span>
+                <span id="header-coding-model" class="pill-val">...</span>
+            </div>
+            <div class="thinking-badge">
+                <div class="thinking-dot"></div>
+                <span>Planner Active</span>
+            </div>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                <span>Server Active</span>
+            </div>
         </div>
     </header>
 
@@ -688,6 +765,8 @@
                         rSelect.insertAdjacentHTML('beforeend', `<option value="${config.ollama_reasoning_model}">${config.ollama_reasoning_model} (configured but not pulled)</option>`);
                     }
                     rSelect.value = config.ollama_reasoning_model;
+                    const hdrR = document.getElementById('header-reasoning-model');
+                    if (hdrR) hdrR.innerText = config.ollama_reasoning_model;
                 }
                 
                 if (config.ollama_coding_model) {
@@ -695,6 +774,8 @@
                         cSelect.insertAdjacentHTML('beforeend', `<option value="${config.ollama_coding_model}">${config.ollama_coding_model} (configured but not pulled)</option>`);
                     }
                     cSelect.value = config.ollama_coding_model;
+                    const hdrC = document.getElementById('header-coding-model');
+                    if (hdrC) hdrC.innerText = config.ollama_coding_model;
                 }
 
                 if (config.bridge_head_model) {

@@ -23,25 +23,44 @@ class Colors:
     RESET = "\033[0m"
 
 
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
 def print_banner(working_dir: str, reasoning_model: str, coding_model: str) -> None:
+    """Print clean aligned CLI banner with dynamic dashboard-synced models."""
+    title1 = "Shamsul Native CLI Agent (v3.13.12)"
+    title2 = "Native Tool Calling • 3-Role AI Architecture"
+    line_reasoning = f"Reasoning (Planner): {reasoning_model}"
+    line_coding = f"Coding / Executor:   {coding_model}"
+    line_dir = f"Working Directory:   {working_dir}"
+
+    max_content_len = max(
+        len(title1),
+        len(title2),
+        len(line_reasoning),
+        len(line_coding),
+        len(line_dir),
+    )
+    box_width = max(max_content_len + 4, 62)
+
+    top_border = f"╭{'─' * box_width}╮"
+    mid_border = f"├{'─' * box_width}┤"
+    bot_border = f"╰{'─' * box_width}╯"
+
+    print(f"{Colors.CYAN}{Colors.BOLD}{top_border}{Colors.RESET}")
+    print(f"{Colors.CYAN}{Colors.BOLD}│  {title1.ljust(box_width - 2)}│{Colors.RESET}")
+    print(f"{Colors.CYAN}{Colors.BOLD}│  {title2.ljust(box_width - 2)}│{Colors.RESET}")
+    print(f"{Colors.CYAN}{Colors.BOLD}{mid_border}{Colors.RESET}")
     print(
-        f"{Colors.CYAN}{Colors.BOLD}╭─────────────────────────────────────────────────────────╮{Colors.RESET}"
+        f"│  {Colors.YELLOW}Reasoning (Planner):{Colors.RESET} {reasoning_model.ljust(box_width - 24)}│"
     )
     print(
-        f"{Colors.CYAN}{Colors.BOLD}│  Shamsul Native CLI Agent (v3.12.4)                      │{Colors.RESET}"
+        f"│  {Colors.YELLOW}Coding / Executor:{Colors.RESET}   {coding_model.ljust(box_width - 24)}│"
     )
     print(
-        f"{Colors.CYAN}{Colors.BOLD}│  Native Tool Calling • 3-Role AI Architecture            │{Colors.RESET}"
+        f"│  {Colors.YELLOW}Working Directory:{Colors.RESET}   {working_dir.ljust(box_width - 24)}│"
     )
-    print(
-        f"{Colors.CYAN}{Colors.BOLD}├─────────────────────────────────────────────────────────┤{Colors.RESET}"
-    )
-    print(f"│  {Colors.YELLOW}Reasoning (Planner):{Colors.RESET} {reasoning_model}")
-    print(f"│  {Colors.YELLOW}Coding / Executor:{Colors.RESET}   {coding_model}")
-    print(f"│  {Colors.YELLOW}Working Directory:{Colors.RESET}   {working_dir}")
-    print(
-        f"{Colors.CYAN}{Colors.BOLD}╰─────────────────────────────────────────────────────────╯{Colors.RESET}"
-    )
+    print(f"{Colors.CYAN}{Colors.BOLD}{bot_border}{Colors.RESET}")
     print(
         f"{Colors.DIM}Type /help for available commands or /exit to quit.{Colors.RESET}\n"
     )
@@ -50,7 +69,12 @@ def print_banner(working_dir: str, reasoning_model: str, coding_model: str) -> N
 def print_help() -> None:
     print(f"{Colors.BOLD}Available Commands:{Colors.RESET}")
     print(f"  {Colors.CYAN}/help{Colors.RESET}      Show this help message")
-    print(f"  {Colors.CYAN}/clear{Colors.RESET}     Reset conversation history")
+    print(
+        f"  {Colors.CYAN}/clear{Colors.RESET}     Reset conversation history and session context store"
+    )
+    print(
+        f"  {Colors.CYAN}/context{Colors.RESET}   Display active workspace context and session files"
+    )
     print(
         f"  {Colors.CYAN}/roles{Colors.RESET}     Display active 3-role model configuration"
     )
@@ -127,26 +151,40 @@ async def _repl_loop(
             print_help()
             continue
         elif cmd == "/clear":
-            engine.reset()
-            print(f"{Colors.GREEN}Conversation history cleared.{Colors.RESET}\n")
+            engine.reset(working_dir)
+            print(
+                f"{Colors.GREEN}Conversation history and session context cleared.{Colors.RESET}\n"
+            )
+            continue
+        elif cmd == "/context":
+            print(f"{Colors.BOLD}Active Workspace & Session Context:{Colors.RESET}")
+            print(engine.get_context_summary(working_dir) + "\n")
             continue
         elif cmd == "/roles":
+            # Dynamic lookup synced with dashboard settings
+            current_settings = get_settings()
             print(f"{Colors.BOLD}Active Roles Configuration:{Colors.RESET}")
-            print(f"  Planner: {settings.ollama_reasoning_model}")
-            print(f"  Coder:   {settings.ollama_coding_model}")
-            print(f"  Base URL: {settings.ollama_base_url}\n")
+            print(f"  Planner: {current_settings.ollama_reasoning_model}")
+            print(f"  Coder:   {current_settings.ollama_coding_model}")
+            print(f"  Base URL: {current_settings.ollama_base_url}\n")
             continue
         elif cmd == "/model":
+            current_settings = get_settings()
             print(f"{Colors.BOLD}Ollama API Connection:{Colors.RESET}")
-            print(f"  Base URL: {settings.ollama_base_url}\n")
+            print(f"  Base URL: {current_settings.ollama_base_url}\n")
             continue
 
-        # Print thinking header
-        print(f"\n{Colors.DIM}● Thinking...{Colors.RESET}")
+        # Thinking animation frames
+        frame_idx = 0
+
+        # Print thinking header with pulsing animation indicator
+        print(f"\n{Colors.MAGENTA}{Colors.BOLD}● Thinking... ⠋{Colors.RESET}")
 
         response_text = ""
 
         def on_thinking(chunk: str) -> None:
+            nonlocal frame_idx
+            frame_idx = (frame_idx + 1) % len(SPINNER_FRAMES)
             sys.stdout.write(f"{Colors.DIM}{chunk}{Colors.RESET}")
             sys.stdout.flush()
 
@@ -170,9 +208,9 @@ async def _repl_loop(
         def on_tool_end(name: str, result: str) -> None:
             lines = result.splitlines()
             summary = lines[0] if lines else result[:60]
-            print(f"{Colors.DIM}  └─ Result: {summary}{Colors.RESET}")
+            print(f"{Colors.DIM}  └─ Result: {summary}{Colors.RESET}\n")
 
-        print(f"{Colors.CYAN}{Colors.BOLD}Agent Response:{Colors.RESET}")
+        print(f"\n{Colors.CYAN}{Colors.BOLD}Agent Response:{Colors.RESET}")
         try:
             await engine.run_turn(
                 cmd,
@@ -182,9 +220,10 @@ async def _repl_loop(
                 on_tool_start=on_tool_start,
                 on_tool_end=on_tool_end,
             )
-            print("\n")
+            # Ensure clear line break after model output so output does not collide with prompt
+            print("\n\n")
         except Exception as exc:
-            print(f"\n{Colors.RED}Error running turn: {exc}{Colors.RESET}\n")
+            print(f"\n{Colors.RED}Error running turn: {exc}{Colors.RESET}\n\n")
 
 
 if __name__ == "__main__":

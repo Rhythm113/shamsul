@@ -283,42 +283,86 @@ async def test_mid_task_stall_never_ends_on_planner_complete(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_replan_budget_caps_planner_then_failsafe_drives_executor(tmp_path):
-    """The replan budget caps planner re-consultation but the turn does NOT stop.
+async def test_planner_retry_on_empty_or_failed_queries(tmp_path):
+    """Planner queries retry automatically when they encounter transient errors or empty text."""
+    engine = ShamsulAgentEngine()
+    engine.settings.ollama_reasoning_model = "planner-model"
 
-    Regressed from the old contract where exhausting the budget cut the loop off. Now,
-    once the budget is spent, the loop stops consulting the planner and keeps driving
-    the executor in failsafe mode until max_turns — then flags the build as UNFINISHED
-    rather than dropping back to the prompt silently.
-    """
+    attempts = {"n": 0}
+
+    async def side_effect(url, json=None, **kwargs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return _PlannerResponse("")
+        return _PlannerResponse("Retried plan succeeds.")
+
+    with patch("httpx.AsyncClient.post", AsyncMock(side_effect=side_effect)):
+        plan = await engine._run_planner_phase(
+            "planner-model", "test request", str(tmp_path), None
+        )
+
+    assert attempts["n"] == 2
+    assert "Retried plan succeeds." in plan
+
+
+@pytest.mark.asyncio
+async def test_workspace_and_session_context_support(tmp_path):
+    """Verify context.md auto-loading and SessionContextStore tracking during tool execution."""
+    (tmp_path / "context.md").write_text("Rule 1: Use strict types", encoding="utf-8")
+    (tmp_path / "sample.py").write_text("print('hello')", encoding="utf-8")
+
+    engine = ShamsulAgentEngine()
+    summary_before = engine.get_context_summary(str(tmp_path))
+    assert "Rule 1: Use strict types" in summary_before
+
+    # Simulate tool execution update in SessionContextStore
+    res = execute_agent_tool("read_file", {"file_path": "sample.py"}, str(tmp_path))
+    assert "print('hello')" in res
+
+    session_id = engine._get_session_id(str(tmp_path))
+    engine.session_store.update_file(session_id, "sample.py", "print('hello')")
+
+    from cli.agent.engine import _save_workspace_context
+
+    _save_workspace_context(str(tmp_path), engine.session_store, session_id)
+
+    summary_after = engine.get_context_summary(str(tmp_path))
+    assert "Rule 1: Use strict types" in summary_after
+    assert "sample.py" in summary_after
+    assert (tmp_path / "context.md").exists()
+    assert "sample.py" in (tmp_path / "context.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_planner_replans_continuously_without_non_planner_failsafe(tmp_path):
+    """Planner re-plans on every executor stall without reverting to a non-planner failsafe."""
     engine = ShamsulAgentEngine()
     engine.settings.ollama_reasoning_model = "planner-model"
     engine.settings.ollama_coding_model = "executor-model"
-    engine.settings.agent_max_replans = 2
     engine.settings.agent_max_turns = 4
 
-    # Every executor turn is a stall. The planner sees the initial plan + exactly the two
-    # replans the budget allows; any further stalls must be handled without the planner.
     executor_msgs = [
-        {"content": "still thinking", "tool_calls": []},
-        {"content": "still thinking", "tool_calls": []},
-        {"content": "still thinking", "tool_calls": []},
-        {"content": "still thinking", "tool_calls": []},
+        {"content": "thinking 1", "tool_calls": []},
+        {"content": "thinking 2", "tool_calls": []},
+        {"content": "thinking 3", "tool_calls": []},
+        {"content": "TASK COMPLETE", "tool_calls": []},
     ]
     planner_texts = [
         "initial plan",
-        "Executing step 1.",
-        "Executing step 2.",
+        "NEXT STEP: keep building step 1",
+        "NEXT STEP: keep building step 2",
+        "NEXT STEP: keep building step 3",
+        "TASK COMPLETE",
     ]
 
     with patch("httpx.AsyncClient.post", _fake_chat_post(executor_msgs, planner_texts)):
-        response = await engine.run_turn("do it", str(tmp_path))
+        response = await engine.run_turn("build request", str(tmp_path))
 
-    # All max_turns executor stalls were processed (the loop did not stop at the budget).
-    # Stalls 3 and 4 ran in failsafe mode with no planner round-trip, then the turn was
-    # flagged UNFINISHED instead of silently returning.
-    assert response.count("still thinking") == 4
-    assert "[UNFINISHED" in response
+    assert "thinking 1" in response
+    assert "thinking 2" in response
+    assert "thinking 3" in response
+    assert "TASK COMPLETE" in response
+    assert "[Failsafe: continuing without planner...]" not in response
 
 
 @pytest.mark.asyncio
@@ -342,30 +386,3 @@ async def test_post_json_retry_on_transient_status():
 
     assert calls["n"] == 2
     assert resp.json()["choices"][0]["message"]["content"] == "ok now"
-
-
-@pytest.mark.asyncio
-async def test_failsafe_loop_does_not_silently_stop(tmp_path):
-    """Exhausting the planner budget must NOT silently end the turn mid-build.
-
-    Failsafe: past the planner budget the loop keeps driving the executor with forced
-    directives up to max_turns, and if it still never signals TASK COMPLETE it appends an
-    explicit [UNFINISHED] marker rather than dropping back to the prompt silently.
-    """
-    engine = ShamsulAgentEngine()
-    engine.settings.ollama_reasoning_model = "planner-model"
-    engine.settings.ollama_coding_model = "executor-model"
-    engine.settings.agent_max_replans = 1
-    engine.settings.agent_max_turns = 3
-
-    # The executor never finishes: every turn is a stall with no tool call.
-    executor_msgs = [{"content": "attempt", "tool_calls": []}] * 4
-    planner_texts = ["Initial plan.", "NEXT STEP: keep going"]
-
-    with patch("httpx.AsyncClient.post", _fake_chat_post(executor_msgs, planner_texts)):
-        response = await engine.run_turn("do it", str(tmp_path))
-
-    # The turn did not break silently at the planner budget: it kept iterating in
-    # failsafe mode, then flagged the unfinished build explicitly.
-    assert response.count("attempt") == 3
-    assert "[UNFINISHED" in response
